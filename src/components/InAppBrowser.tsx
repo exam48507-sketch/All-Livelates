@@ -11,9 +11,22 @@ interface InAppBrowserProps {
 export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) {
   const [loading, setLoading] = useState(true);
   const [iframeKey, setIframeKey] = useState(0);
+  const [useProxy, setUseProxy] = useState(true);
 
-  // Safely format proxy URL to route through server.ts proxy
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+  // Detect static hosts (like Vercel) where Express server is unreachable
+  useEffect(() => {
+    const isVercel = 
+      window.location.hostname.endsWith(".vercel.app") || 
+      window.location.hostname.endsWith(".github.io") || 
+      window.location.hostname.endsWith(".netlify.app") ||
+      window.location.hostname.endsWith(".amplifyapp.com");
+    if (isVercel) {
+      setUseProxy(false);
+    }
+  }, []);
+
+  // Safely format proxy URL or fall back to direct load
+  const frameUrl = useProxy ? `/api/proxy?url=${encodeURIComponent(url)}` : url;
 
   // Refresh / Reload action
   const handleReload = () => {
@@ -50,14 +63,35 @@ export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) 
             <h2 className="text-xs font-bold text-gray-200 truncate font-sans">
               {title}
             </h2>
-            <p className="text-[9px] text-emerald-400 font-mono tracking-wider flex items-center justify-center gap-1">
-              <ShieldCheck className="w-3 h-3 stroke-[2.5]" />
-              PROXY SECURED
-            </p>
+            {useProxy ? (
+              <p className="text-[9px] text-emerald-400 font-mono tracking-wider flex items-center justify-center gap-1">
+                <ShieldCheck className="w-3 h-3 stroke-[2.5]" />
+                PROXY SECURED
+              </p>
+            ) : (
+              <p className="text-[9px] text-cyan-400 font-mono tracking-wider flex items-center justify-center gap-1" title="Vercel বা স্ট্যাটিক হোস্টিংয়ের জন্য প্রক্সি বাইপাস করা হয়েছে">
+                <Globe className="w-2.5 h-2.5 text-cyan-500 animate-spin-slow" />
+                DIRECT FRAME MODE
+              </p>
+            )}
           </div>
 
           {/* Header Action tools */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setLoading(true);
+                setUseProxy(!useProxy);
+              }}
+              className={`p-1.5 rounded-xl text-xs active:scale-95 transition-all border cursor-pointer ${
+                useProxy 
+                  ? "bg-emerald-950/40 border-emerald-800/40 text-emerald-400 hover:bg-emerald-900/30" 
+                  : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700/50"
+              }`}
+              title={useProxy ? "Direct Load মোডে পরিবর্তন করুন" : "Secure Proxy মোডে পরিবর্তন করুন"}
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+            </button>
             <button
               onClick={handleReload}
               className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl active:scale-95 transition-all text-xs border border-slate-700/50 cursor-pointer"
@@ -69,7 +103,7 @@ export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) 
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-400 rounded-xl active:scale-95 transition-all text-xs border border-cyan-800/50 cursor-pointer"
+              className="p-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-400 rounded-xl active:scale-95 transition-all text-xs border border-cyan-800/50 cursor-pointer inline-flex items-center justify-center"
               title="নতুন ট্যাবে খুলুন"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -94,7 +128,7 @@ export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) 
       <div className="flex-1 w-full bg-white relative">
         <iframe
           key={iframeKey}
-          src={proxyUrl}
+          src={frameUrl}
           className="w-full h-full border-0"
           onLoad={() => setLoading(false)}
           sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
@@ -123,9 +157,20 @@ export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) 
                 <p className="text-xs text-slate-400 max-w-xs font-mono">
                   {title} ({new URL(url).hostname || "Loading"})
                 </p>
-                <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl text-[11px] text-amber-500 font-medium">
-                  ⚠️ সাইট লোড হতে কিছু সময় লাগলে “নতুন ট্যাবে খুলুন” বাটন চাপুন।
-                </div>
+                {!useProxy ? (
+                  <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl text-[11px] text-slate-300 max-w-sm space-y-1.5 text-left mx-auto">
+                    <p className="text-amber-400 font-bold flex items-center gap-1">
+                      📢 ভার্সেল সার্ভারলেস মুড অ্যাক্টিভ
+                    </p>
+                    <p className="text-slate-400 leading-normal">
+                      Vercel-এ হোস্ট করার কারণে ডিরেক্ট ফ্রেম লোড করা হচ্ছে। যদি সাইটটি লোড না হয়ে সাদা স্ক্রিন আসে, দয়া করে উপরের <b>ডানদিকের আইকনে চেপে সরাসরি নতুন ট্যাবে</b> ভিডিওটি দেখুন।
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-slate-900 border border-slate-800 p-2.5 rounded-xl text-[11px] text-amber-500 font-medium">
+                    ⚠️ সাইট লোড হতে কিছু সময় লাগলে “নতুন ট্যাবে খুলুন” বাটন চাপুন।
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

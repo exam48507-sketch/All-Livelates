@@ -47,6 +47,9 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
     type: "info"
   });
 
+  // Change Pin state
+  const [newPinCode, setNewPinCode] = useState("");
+
   // Verify PIN
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +57,7 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
       setIsUnlocked(true);
       setLoginError("");
     } else {
-      setLoginError("ভুল পিন কোড! অনুগ্রহ করে আবার চেষ্টা করুন। (Default: 1234)");
+      setLoginError("ভুল পিন কোড! অনুগ্রহ করে আবার চেষ্টা করুন।");
     }
   };
 
@@ -229,16 +232,36 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
   };
 
   // Handle PIN save
-  const handleUpdateAdminPin = (newPin: string) => {
-    if (newPin.length < 4) return;
+  const handleSaveNewPin = (newPin: string) => {
+    const trimmed = newPin.trim();
+    if (!trimmed || trimmed.length < 4) {
+      alert("পিন কোড অবশ্যই নূন্যতম ৪ ডিজিটের হতে হবে!");
+      return;
+    }
     const updatedConfig = {
       ...localConfig,
-      adminCode: newPin
+      adminCode: trimmed
     };
     setLocalConfig(updatedConfig);
+    handleSaveToDatabase(updatedConfig);
+    setNewPinCode("");
+    alert(`নতুন পিন কোডটি সফলভাবে আপডেট করা হয়েছে! (আপনার নতুন পিন: ${trimmed})`);
   };
 
   if (!isUnlocked) {
+    const handleResetPin = () => {
+      const confirmReset = window.confirm("আপনি কি অ্যাডমিন পিন কোডটি রিসেট করে ডিফল্ট '1234' সেট করতে চান?");
+      if (confirmReset) {
+        const resetConfig = {
+          ...localConfig,
+          adminCode: "1234"
+        };
+        setLocalConfig(resetConfig);
+        onSaveConfig(resetConfig);
+        alert("পিন কোড সফলভাবে রিসেট হয়ে '1234' সেট হয়েছে!");
+      }
+    };
+
     return (
       <div id="admin-gate-stage" className="max-w-md mx-auto p-6 bg-slate-900 border border-slate-800 rounded-3xl shadow-xl mt-8">
         <div className="text-center space-y-3 mb-6">
@@ -263,7 +286,6 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
               maxLength={8}
               autoFocus
             />
-            <p className="text-[10px] text-slate-500 font-mono text-right">Default code: 1234</p>
           </div>
 
           {loginError && (
@@ -273,12 +295,22 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
             </div>
           )}
 
-          <button
-            type="submit"
-            className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 hover:opacity-90 active:scale-95 text-slate-950 font-bold py-3.5 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-400/10 cursor-pointer"
-          >
-            আনলক ড্যাশবোর্ড
-          </button>
+          <div className="space-y-2 pt-2">
+            <button
+              type="submit"
+              className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 hover:opacity-90 active:scale-95 text-slate-950 font-bold py-3.5 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-400/10 cursor-pointer text-center"
+            >
+              আনলক ড্যাশবোর্ড
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResetPin}
+              className="w-full bg-transparent hover:bg-slate-800/40 text-slate-400 hover:text-slate-200 border border-transparent hover:border-slate-800/80 font-medium py-2 rounded-xl text-xs cursor-pointer transition-all text-center"
+            >
+              🔑 পিন কোড রিসেট করুন (Reset to 1234)
+            </button>
+          </div>
         </form>
       </div>
     );
@@ -672,20 +704,22 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
 
               {/* Secondary block: Administration credentials update */}
               <div className="pt-5 border-t border-slate-800 space-y-3">
-                <span className="text-[11px] font-mono text-slate-500 uppercase tracking-widest block">নিরাপত্তা কোড (ADMIN LOGIN PIN)</span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                  <span className="text-[11px] font-mono text-slate-500 uppercase tracking-widest block">নিরাপত্তা কোড (ADMIN LOGIN PIN)</span>
+                  <span className="text-[10px] text-cyan-400 font-sans">বর্তমান অ্যাক্টিভ পিন: <b className="font-mono bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{localConfig.adminCode || "1234"}</b></span>
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     maxLength={10}
-                    placeholder="নতুন ৪-৮ ডিজিটের পিন কোড"
+                    placeholder="নতুন ৪-৮ ডিজিটের পিন কোড লিখুন"
                     className="bg-slate-900 border border-slate-800 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono outline-none flex-1"
-                    onChange={(e) => handleUpdateAdminPin(e.target.value)}
+                    value={newPinCode}
+                    onChange={(e) => setNewPinCode(e.target.value)}
                   />
                   <button
-                    onClick={() => {
-                      handleSaveToDatabase(localConfig);
-                    }}
-                    className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold cursor-pointer transition-all border border-slate-700"
+                    onClick={() => handleSaveNewPin(newPinCode)}
+                    className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 hover:text-cyan-300 border border-cyan-500/20 px-4 py-2.5 rounded-xl text-xs font-bold cursor-pointer transition-all"
                   >
                     পিন আপডেট করুন
                   </button>

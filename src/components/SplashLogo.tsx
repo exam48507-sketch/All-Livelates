@@ -12,8 +12,8 @@ export default function SplashLogo({ onComplete }: SplashLogoProps) {
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsVisible(false);
-      setTimeout(onComplete, 600); // Allow exit transition to complete
-    }, 2800);
+      setTimeout(onComplete, 300); // Allow exit transition to complete
+    }, 800);
 
     return () => clearTimeout(timer);
   }, [onComplete]);
@@ -90,7 +90,7 @@ export default function SplashLogo({ onComplete }: SplashLogoProps) {
                   className="h-full bg-gradient-to-r from-cyan-400 current to-violet-500"
                   initial={{ width: "0%" }}
                   animate={{ width: "100%" }}
-                  transition={{ duration: 2.2, ease: "easeInOut" }}
+                  transition={{ duration: 0.8, ease: "easeInOut" }}
                 />
               </div>
               <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest text-center animate-pulse">
