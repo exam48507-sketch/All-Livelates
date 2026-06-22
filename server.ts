@@ -13,7 +13,7 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// API route: Load system configuration
+// API route: Load system configuration (sanitized to prevent administrative secret leaks to ordinary users)
 app.get("/api/config", (req, res) => {
   try {
     const dataPath = path.join(__dirname, "data-store.json");
@@ -22,15 +22,132 @@ app.get("/api/config", (req, res) => {
     }
     const rawData = fs.readFileSync(dataPath, "utf8");
     const parsedData: AppConfig = JSON.parse(rawData);
-    res.json(parsedData);
+
+    // Deep copy and strip credentials
+    const sanitized = { ...parsedData };
+    delete (sanitized as any).adminCode;
+    delete (sanitized as any).adminCodeSecondary;
+    delete (sanitized as any).securityAnswer;
+    delete (sanitized as any).feedbacks; // Feedbacks may contain user private billing metadata
+    
+    // Fallback/Default values for customization options
+    if (!sanitized.appName) sanitized.appName = "ALL LIVE";
+    if (!sanitized.adTitle) sanitized.adTitle = "আপনার সুবিধাজনক বাটন বেছে নিন";
+    if (!sanitized.adDescription) sanitized.adDescription = "নিচের ওয়াচ বাটনসমূহে ক্লিক করলেই স্পন্সর বিজ্ঞাপনটি শুরু হবে। ৫ সেকেন্ড বিজ্ঞাপন দেখে ওয়েবসাইট উপভোগ করুন।";
+    if (!sanitized.backButtonText) sanitized.backButtonText = "হোমপেজে ফিরুন (Ad সহ)";
+    if (sanitized.backButtonAdTrigger === undefined) sanitized.backButtonAdTrigger = true;
+
+    // Send public settings only
+    res.json(sanitized);
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to load configuration" });
   }
 });
 
-// API route: Update configuration & settings
+// Helper validation middleware
+const checkAdminAuth = (req: any): { success: boolean; config?: AppConfig; error?: string } => {
+  const dataPath = path.join(__dirname, "data-store.json");
+  if (!fs.existsSync(dataPath)) {
+    return { success: false, error: "Database file absent" };
+  }
+  const rawData = fs.readFileSync(dataPath, "utf8");
+  const config: AppConfig = JSON.parse(rawData);
+
+  const storedPin1 = config.adminCode || "1234";
+  const storedPin2 = config.adminCodeSecondary || "5678";
+
+  const pin1 = (req.headers["x-admin-pin"] || req.body?.pin1 || "").toString().trim();
+  const pin2 = (req.headers["x-admin-pin-secondary"] || req.body?.pin2 || "").toString().trim();
+
+  // Enforce credentials check
+  if (pin1 === storedPin1 && pin2 === storedPin2) {
+    return { success: true, config };
+  }
+
+  // Support master override/failsafe if DB is missing values
+  if (pin1 === "1234" && pin2 === "5678" && !config.adminCodeSecondary) {
+    return { success: true, config };
+  }
+
+  return { success: false, error: "ভুল এডমিন পিন কোড! অ্যাক্সেস প্রত্যাখ্যাত।" };
+};
+
+// API route: Live check for Step 1 PIN verification
+app.post("/api/admin/verify-step1", (req, res) => {
+  try {
+    const dataPath = path.join(__dirname, "data-store.json");
+    if (!fs.existsSync(dataPath)) {
+      return res.status(404).json({ error: "Database file absent" });
+    }
+    const rawData = fs.readFileSync(dataPath, "utf8");
+    const config: AppConfig = JSON.parse(rawData);
+
+    const checkPin1 = (req.body?.pin1 || "").toString().trim();
+    const storedPin1 = (config.adminCode || "1234").toString().trim();
+
+    if (checkPin1 === storedPin1) {
+      res.json({ success: true, message: "প্রথম পিন কোডটি সঠিক হয়েছে।" });
+    } else {
+      res.status(401).json({ success: false, error: "ভুল প্রথম পিন কোড!" });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API route: Secure admin verification and raw details loading
+app.post("/api/admin/verify-pin", (req, res) => {
+  const auth = checkAdminAuth(req);
+  if (auth.success && auth.config) {
+    const rawConfig = { ...auth.config };
+    if (!rawConfig.appName) rawConfig.appName = "ALL LIVE";
+    if (!rawConfig.adTitle) rawConfig.adTitle = "আপনার সুবিধাজনক বাটন বেছে নিন";
+    if (!rawConfig.adDescription) rawConfig.adDescription = "নিচের ওয়াচ বাটনসমূহে ক্লিক করলেই স্পন্সর বিজ্ঞাপনটি শুরু হবে। ৫ সেকেন্ড বিজ্ঞাপন দেখে ওয়েবসাইট উপভোগ করুন।";
+    if (!rawConfig.backButtonText) rawConfig.backButtonText = "হোমপেজে ফিরুন (Ad সহ)";
+    if (rawConfig.backButtonAdTrigger === undefined) rawConfig.backButtonAdTrigger = true;
+    res.json({ success: true, config: rawConfig });
+  } else {
+    res.status(401).json({ success: false, error: auth.error });
+  }
+});
+
+// API route: Secure PIN recovery via secret question
+app.post("/api/admin/verify-recovery", (req, res) => {
+  try {
+    const dataPath = path.join(__dirname, "data-store.json");
+    if (!fs.existsSync(dataPath)) {
+      return res.status(404).json({ error: "Database missing" });
+    }
+    const rawData = fs.readFileSync(dataPath, "utf8");
+    const config: AppConfig = JSON.parse(rawData);
+
+    const { answer, pin1, pin2 } = req.body;
+    if (!answer || !pin1 || !pin2) {
+      return res.status(400).json({ error: "প্রশ্নের উত্তর ও নতুন কোডসমূহ আবশ্যক!" });
+    }
+
+    const storedAnswer = (config.securityAnswer || "নীল").toString().trim().toLowerCase();
+    if (answer.toString().trim().toLowerCase() === storedAnswer) {
+      config.adminCode = pin1.toString().trim();
+      config.adminCodeSecondary = pin2.toString().trim();
+      fs.writeFileSync(dataPath, JSON.stringify(config, null, 2), "utf8");
+      return res.json({ success: true, message: "পিন কোডদ্বয় সফলভাবে পরিবর্তন হয়েছে!", config });
+    } else {
+      return res.status(401).json({ error: "নিরাপত্তা প্রশ্নের উত্তরটি সঠিক নয়।" });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API route: Securely update complete configuration (Requires PIN check in headers)
 app.post("/api/config", (req, res) => {
   try {
+    const auth = checkAdminAuth(req);
+    if (!auth.success) {
+      return res.status(401).json({ error: auth.error });
+    }
+
     const dataPath = path.join(__dirname, "data-store.json");
     const updatedConfig: AppConfig = req.body;
     
@@ -39,10 +156,137 @@ app.post("/api/config", (req, res) => {
       return res.status(400).json({ error: "Invalid configuration data structure" });
     }
 
-    fs.writeFileSync(dataPath, JSON.stringify(updatedConfig, null, 2), "utf8");
-    res.json({ success: true, message: "Configuration saved successfully", config: updatedConfig });
+    // Keep the pins in synchronized memory if they were modified by the post body
+    const freshConfig = {
+      ...auth.config,
+      ...updatedConfig
+    };
+
+    fs.writeFileSync(dataPath, JSON.stringify(freshConfig, null, 2), "utf8");
+    res.json({ success: true, message: "Configuration saved successfully", config: freshConfig });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to save configuration" });
+  }
+});
+
+// API route: Public Feedback Submit (Bypasses PIN checks to let general users suggest features)
+app.post("/api/feedback/submit", (req, res) => {
+  try {
+    const dataPath = path.join(__dirname, "data-store.json");
+    if (!fs.existsSync(dataPath)) {
+      return res.status(404).json({ error: "Database file missing" });
+    }
+    const rawData = fs.readFileSync(dataPath, "utf8");
+    const config: AppConfig = JSON.parse(rawData);
+
+    const { userName, userComment } = req.body;
+    if (!userName || !userComment) {
+      return res.status(400).json({ error: "নাম ও মন্তব্য দুটোই প্রদান করুন।" });
+    }
+
+    const newFeedback = {
+      id: `fb_${Date.now()}`,
+      userName: userName.toString().trim(),
+      userComment: userComment.toString().trim(),
+      submittedAt: new Date().toISOString()
+    };
+
+    if (!config.feedbacks) {
+      config.feedbacks = [];
+    }
+    config.feedbacks.unshift(newFeedback);
+
+    fs.writeFileSync(dataPath, JSON.stringify(config, null, 2), "utf8");
+    res.json({ success: true, feedback: newFeedback });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API route: Public Donation Submit (Bypasses PIN checks to let users register donation and claim Ad-Block)
+app.post("/api/donation/submit", (req, res) => {
+  try {
+    const dataPath = path.join(__dirname, "data-store.json");
+    if (!fs.existsSync(dataPath)) {
+      return res.status(404).json({ error: "Database file missing" });
+    }
+    const rawData = fs.readFileSync(dataPath, "utf8");
+    const config: AppConfig = JSON.parse(rawData);
+
+    const { userName, userPhoneOrTxid, amount } = req.body;
+    if (!userName || !userPhoneOrTxid || !amount) {
+      return res.status(400).json({ error: "সকল তথ্য (নাম, ওয়ালেট/TxID, ও পরিমাণ) পূরণ করুন।" });
+    }
+
+    // Generate a beautiful, unique activation code for the license claim
+    const codeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let randomKey = "ADBLK-";
+    for (let i = 0; i < 6; i++) {
+      randomKey += codeChars.charAt(Math.floor(Math.random() * codeChars.length));
+    }
+
+    const newClaim = {
+      id: `claim_${Date.now()}`,
+      userName: userName.toString().trim(),
+      userPhoneOrTxid: userPhoneOrTxid.toString().trim(),
+      amount: amount.toString().trim(),
+      status: "pending" as const,
+      activationKey: randomKey,
+      createdAt: new Date().toISOString()
+    };
+
+    if (!config.adFreeUsers) {
+      config.adFreeUsers = [];
+    }
+    config.adFreeUsers.unshift(newClaim);
+
+    fs.writeFileSync(dataPath, JSON.stringify(config, null, 2), "utf8");
+    res.json({ success: true, claim: newClaim });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API route: Verify activation key for ad-free experience (Public client-side check)
+app.post("/api/ad-free/verify", (req, res) => {
+  try {
+    const dataPath = path.join(__dirname, "data-store.json");
+    if (!fs.existsSync(dataPath)) {
+      return res.status(404).json({ error: "Database file missing" });
+    }
+    const rawData = fs.readFileSync(dataPath, "utf8");
+    const config: AppConfig = JSON.parse(rawData);
+
+    const { activationKey } = req.body;
+    if (!activationKey) {
+      return res.status(400).json({ error: "Activation Key is required" });
+    }
+
+    const trimmedKey = activationKey.toString().trim().toUpperCase();
+    const approvedUser = (config.adFreeUsers || []).find(
+      u => u.activationKey.toUpperCase() === trimmedKey && u.status === "approved"
+    );
+
+    if (approvedUser) {
+      if (approvedUser.expiryDate && approvedUser.expiryDate !== "permanent" && approvedUser.expiryDate !== "expired") {
+        const expiry = new Date(approvedUser.expiryDate);
+        const now = new Date();
+        if (now > expiry) {
+          return res.status(403).json({ success: false, error: "আপনার অ্যাড-ফ্রি লাইসেন্সের মেয়াদ শেষ হয়ে গেছে!" });
+        }
+      }
+      res.json({ 
+        success: true, 
+        userName: approvedUser.userName, 
+        expiryDate: approvedUser.expiryDate || "permanent",
+        duration: approvedUser.duration || "permanent",
+        message: "অ্যাড-ফ্রি লাইসেন্স কোড সফলভাবে সক্রিয় হয়েছে!" 
+      });
+    } else {
+      res.status(404).json({ success: false, error: "ভুল অথবা অনিবন্ধিত অ্যাক্টিভেশন কি!" });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -69,6 +313,11 @@ function parseCSVLine(line: string): string[] {
 // API route: Sync with Google Sheets
 app.post("/api/sync-sheet", async (req, res) => {
   try {
+    const auth = checkAdminAuth(req);
+    if (!auth.success) {
+      return res.status(401).json({ error: auth.error });
+    }
+
     const { googleSheetsId } = req.body;
     if (!googleSheetsId) {
       return res.status(400).json({ error: "Google Spreadsheet ID is required" });

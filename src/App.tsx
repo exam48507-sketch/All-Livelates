@@ -2,7 +2,8 @@ import { useState, useEffect, FormEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Tv, Lock, ShieldCheck, Play, Sparkles, Smartphone, Flame, Calendar, Settings, Sliders,
-  MessageSquare, Send, User, GraduationCap, BookOpen, Film, ExternalLink, MessageCircle, HelpCircle
+  MessageSquare, Send, User, GraduationCap, BookOpen, Film, ExternalLink, MessageCircle, HelpCircle,
+  Heart, Coins, Copy, Check, MoreVertical, X
 } from "lucide-react";
 
 // Types
@@ -77,6 +78,7 @@ const DEFAULT_CONFIG: AppConfig = {
   ],
   googleSheetsId: "",
   adminCode: "1234",
+  adminCodeSecondary: "1234",
   securityQuestion: "আপনার প্রিয় রঙের নাম কী?",
   securityAnswer: "নীল",
   premiumItems: [
@@ -126,6 +128,7 @@ function mergeConfig(parsed: any): AppConfig {
       ...parsed.devDetails
     } : DEFAULT_CONFIG.devDetails,
     feedbackSheetUrl: parsed?.feedbackSheetUrl || DEFAULT_CONFIG.feedbackSheetUrl,
+    adminCodeSecondary: parsed?.adminCodeSecondary || DEFAULT_CONFIG.adminCodeSecondary,
   };
 }
 
@@ -147,10 +150,20 @@ export default function App() {
   });
   const [loadingConfig, setLoadingConfig] = useState(true);
 
+  // Administrative secure secret keys
+  const [adminPin1, setAdminPin1] = useState<string>(() => sessionStorage.getItem("admin_pin_1") || "");
+  const [adminPin2, setAdminPin2] = useState<string>(() => sessionStorage.getItem("admin_pin_2") || "");
+
+  // Ad Free status states
+  const [adFreeActive, setAdFreeActive] = useState<boolean>(() => localStorage.getItem("ad_free_active_state") === "true");
+  const [adFreeUserName, setAdFreeUserName] = useState<string>(() => localStorage.getItem("ad_free_user_name") || "");
+
   // Layout navigation states
   const [activeBrowserUrl, setActiveBrowserUrl] = useState<string | null>(null);
   const [activeBrowserTitle, setActiveBrowserTitle] = useState<string>("");
   const [adminViewOpen, setAdminViewOpen] = useState(false);
+  const [menuModalOpen, setMenuModalOpen] = useState(false);
+  const [menuModalTab, setMenuModalTab] = useState<"donation" | "feedback" | "developer">("donation");
 
   // Active Ads states
   const [activeAd, setActiveAd] = useState<{
@@ -166,6 +179,38 @@ export default function App() {
   const [feedbackName, setFeedbackName] = useState("");
   const [feedbackComment, setFeedbackComment] = useState("");
 
+  // Donation and Free Ad-Block claim states
+  const [donorName, setDonorName] = useState("");
+  const [donorPhoneOrTxid, setDonorPhoneOrTxid] = useState("");
+  const [donorAmount, setDonorAmount] = useState("");
+  const [activationKeyInput, setActivationKeyInput] = useState("");
+  const [pendingClaim, setPendingClaim] = useState<{ userName: string; activationKey: string } | null>(null);
+  const [copyFeedbackIdx, setCopyFeedbackIdx] = useState<string | null>(null);
+
+  // Helper function to check/validate license on load
+  const verifyAdFreeLicense = async (key: string) => {
+    if (!key) return;
+    try {
+      const response = await fetch("/api/ad-free/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ activationKey: key })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setAdFreeActive(true);
+          setAdFreeUserName(data.userName);
+          localStorage.setItem("ad_free_active_state", "true");
+          localStorage.setItem("ad_free_user_name", data.userName);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("License key check failed on server, using cached preference.", e);
+    }
+  };
+
   useEffect(() => {
     // Set dynamic local time for aesthetic tracking
     const updateTime = () => {
@@ -175,6 +220,14 @@ export default function App() {
     updateTime();
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Sync / verify license key on boot
+  useEffect(() => {
+    const cachedKey = localStorage.getItem("ad_free_license");
+    if (cachedKey) {
+      verifyAdFreeLicense(cachedKey);
+    }
   }, []);
 
   // Fetch configs from express DB server with silent failovers
@@ -187,8 +240,13 @@ export default function App() {
           if (contentType && contentType.includes("application/json")) {
             const data = await res.json();
             if (data && Array.isArray(data.buttons)) {
+              // Read public config, keeping adminCodes in local config if admin is logged in
               const merged = mergeConfig(data);
-              setConfig(merged);
+              setConfig(prev => ({
+                ...merged,
+                adminCode: adminPin1 || prev.adminCode,
+                adminCodeSecondary: adminPin2 || prev.adminCodeSecondary
+              }));
               localStorage.setItem("all_live_config", JSON.stringify(merged));
             }
           }
@@ -200,24 +258,31 @@ export default function App() {
       }
     };
     fetchConfig();
-  }, []);
+  }, [adminPin1, adminPin2]);
 
-  // Sync settings with backend or local storage
-  const handleSaveConfig = async (updated: AppConfig): Promise<boolean> => {
+  // Sync settings with backend or local storage (Secured with credentials verification)
+  const handleSaveConfig = async (updated: AppConfig, p1?: string, p2?: string): Promise<boolean> => {
     setConfig(updated);
     localStorage.setItem("all_live_config", JSON.stringify(updated));
 
+    const finalPin1 = p1 || adminPin1;
+    const finalPin2 = p2 || adminPin2;
+
     try {
+      const headers: any = { "Content-Type": "application/json" };
+      if (finalPin1) headers["x-admin-pin"] = finalPin1;
+      if (finalPin2) headers["x-admin-pin-secondary"] = finalPin2;
+
       const res = await fetch("/api/config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(updated)
       });
       if (res.ok) {
         return true;
       }
-      console.warn("Backend save failed. Operating on standalone storage.");
-      return true;
+      console.warn("Backend save authentication failed or save rejected.", res.status);
+      return res.status === 200;
     } catch (e) {
       console.warn("Server unavailable, config saved to client storage.", e);
       return true;
@@ -225,12 +290,19 @@ export default function App() {
   };
 
   // Trigger Google Sheet fetch on server, falling back to direct client-side fetch on Vercel
-  const handleSyncGoogleSheet = async (sheetsId: string) => {
+  const handleSyncGoogleSheet = async (sheetsId: string, p1?: string, p2?: string) => {
+    const finalPin1 = p1 || adminPin1;
+    const finalPin2 = p2 || adminPin2;
+
     // 1. Try server-side action first (if online)
     try {
+      const headers: any = { "Content-Type": "application/json" };
+      if (finalPin1) headers["x-admin-pin"] = finalPin1;
+      if (finalPin2) headers["x-admin-pin-secondary"] = finalPin2;
+
       const res = await fetch("/api/sync-sheet", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ googleSheetsId: sheetsId })
       });
       if (res.ok) {
@@ -243,6 +315,9 @@ export default function App() {
             return { success: true, message: data.message, config: data.config };
           }
         }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        return { success: false, message: errData.error || "শিট সিঙ্ক করতে অ্যাডমিন অথেনটিকেশন ব্যর্থ হয়েছে।" };
       }
     } catch (e) {
       console.warn("Server sync failed, falling back to direct client sync...", e);
@@ -387,7 +462,7 @@ export default function App() {
       setActiveBrowserTitle(btn.name);
     };
 
-    if (config.adConfig.adsEnabled) {
+    if (config.adConfig.adsEnabled && !adFreeActive) {
       // Show dynamic Ad first, navigate upon completion/skip
       setActiveAd({
         network: btn.network,
@@ -397,19 +472,19 @@ export default function App() {
         }
       });
     } else {
-      // Ads disabled globally, open instantly
+      // Ads disabled globally or user belongs to approved Ad-Free, open instantly
       navigateToSite();
     }
   };
 
-  // Back button event interceptor: Shows advertisement before returning to dashboard portal
+  // Back button event interceptor: Shows advertisement before returning to dashboard portal if enabled
   const handleBrowserExit = () => {
     const exitToDashboard = () => {
       setActiveBrowserUrl(null);
       setActiveBrowserTitle("");
     };
 
-    if (config.adConfig.adsEnabled) {
+    if (config.adConfig.adsEnabled && !adFreeActive && (config.backButtonAdTrigger !== false)) {
       // Play exit video ad, close browser on completion
       setActiveAd({
         network: "both", // Alternates upon returning
@@ -424,15 +499,22 @@ export default function App() {
     }
   };
 
+  const [dismissedNotifIds, setDismissedNotifIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem("dismissed_notifications");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
   const handleDismissNotification = (id: string) => {
-    const updated = {
-      ...config,
-      notifications: config.notifications.map(n => n.id === id ? { ...n, active: false } : n)
-    };
-    handleSaveConfig(updated);
+    const nextList = [...dismissedNotifIds, id];
+    setDismissedNotifIds(nextList);
+    localStorage.setItem("dismissed_notifications", JSON.stringify(nextList));
   };
 
-  // Submit User Feedback suggestion to local config
+  // Submit User Feedback suggestion to back-end securely
   const handleFeedbackSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const trimmedName = feedbackName.trim();
@@ -443,23 +525,17 @@ export default function App() {
       return;
     }
 
+    try {
+      await fetch("/api/feedback/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userName: trimmedName, userComment: trimmedComment })
+      });
+    } catch (err) {
+      console.warn("Feedback save rejected online.", err);
+    }
+
     const timestampStr = new Date().toISOString();
-    const newFB = {
-      id: `fb_${Date.now()}`,
-      userName: trimmedName,
-      userComment: trimmedComment,
-      submittedAt: timestampStr
-    };
-
-    const updated = {
-      ...config,
-      feedbacks: [newFB, ...(config.feedbacks || [])]
-    };
-
-    await handleSaveConfig(updated);
-    setFeedbackName("");
-    setFeedbackComment("");
-
     let syncedMsg = "";
     if (config.feedbackSheetUrl && config.feedbackSheetUrl.trim().startsWith("http")) {
       try {
@@ -483,6 +559,88 @@ export default function App() {
     }
 
     alert(`ধন্যবাদ! আপনার অনুরোধ/ফিডব্যাকটি সফলভাবে সাবমিট হয়েছে। আমাদের ডেভেলপার MD Hasan Khalifa খুব শীঘ্রই এটি রিভিউ করবেন।${syncedMsg}`);
+    setFeedbackName("");
+    setFeedbackComment("");
+  };
+
+  // Submit Donation and Ad-Free claim request to backend securely
+  const handleDonationSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmedName = donorName.trim();
+    const trimmedPhone = donorPhoneOrTxid.trim();
+    const trimmedAmount = donorAmount.trim();
+
+    if (!trimmedName || !trimmedPhone || !trimmedAmount) {
+      alert("দয়া করে ডোনেশন ফর্মের সবকটি ঘর সঠিকভাবে পূরণ করুন!");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/donation/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userName: trimmedName,
+          userPhoneOrTxid: trimmedPhone,
+          amount: trimmedAmount
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.claim) {
+          setPendingClaim(data.claim);
+          setDonorName("");
+          setDonorPhoneOrTxid("");
+          setDonorAmount("");
+          alert("অভিনন্দন! আপনার পেমেন্ট রিকোয়েস্ট জমা হয়েছে। নিচে প্রদর্শিত অ্যাক্টিভেশন কি-টি কপি করে রাখুন।");
+        } else {
+          alert("দুঃখিত, ওয়ান ব্যাংক পেমেন্ট গেটওয়েতে সমস্যা দেখা দিয়েছে।");
+        }
+      } else {
+        alert("সার্ভার পেমেন্ট গেটওয়েতে ত্রুটি হয়েছে। অনুগ্রহ করে পরে চেষ্টা করুন।");
+      }
+    } catch (err: any) {
+      alert("নেটওয়ার্ক সংযোগ ত্রুটি! পেমেন্ট রিকোয়েস্ট সাবমিট করা যায়নি।");
+    }
+  };
+
+  // Submit activation key verification
+  const handleVerifyKeySubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmedKey = activationKeyInput.trim();
+
+    if (!trimmedKey) {
+      alert("দয়া করে আপনার অ্যাক্টিভেশন কোডটি এখানে লিখুন!");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/ad-free/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ activationKey: trimmedKey })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setAdFreeActive(true);
+          setAdFreeUserName(data.userName);
+          localStorage.setItem("ad_free_license", trimmedKey.toUpperCase());
+          localStorage.setItem("ad_free_active_state", "true");
+          localStorage.setItem("ad_free_user_name", data.userName);
+          setActivationKeyInput("");
+          alert(`ধন্যবাদ ${data.userName}! অ্যাড-ফ্রি লাইসেন্স কোডটি সফলভাবে সক্রিয় হয়েছে। এখন থেকে কোনো বিজ্ঞাপন শো করবে না! 🚀`);
+        } else {
+          alert("ভুল বা অনিবন্ধিত মেম্বারশিপ কোড!");
+        }
+      } else {
+        alert("ভুল কোড অথবা এডমিন এখনো আপনার পেমেন্ট অনুমোদন করেনি। অনুগ্রহ করে অপেক্ষা করুন অথবা ডেভেলপারের সাথে যোগাযোগ করুন।");
+      }
+    } catch (err) {
+      alert("নেটওয়ার্ক ত্রুটি! ডেটা যাচাই করা যাচ্ছে না।");
+    }
   };
 
   // Splash screen lock
@@ -511,13 +669,18 @@ export default function App() {
 
       {/* Main App Top Bar Navigation */}
       <header className="sticky top-0 bg-slate-950/80 backdrop-blur-xl border-b border-slate-900 px-4 py-3 z-30 flex items-center justify-between shadow-lg relative max-w-7xl mx-auto w-full">
-        <div className="flex items-center gap-2.5">
+        {/* Double-click secret backdoor on Logo & Title to open Admin Panel */}
+        <div 
+          className="flex items-center gap-2.5 cursor-pointer select-none"
+          onDoubleClick={() => setAdminViewOpen(!adminViewOpen)}
+          title="ডাবল ক্লিক করুন"
+        >
           <div className="w-9 h-9 bg-gradient-to-tr from-cyan-400 to-blue-600 rounded-xl flex items-center justify-center shadow-md shadow-cyan-400/10 border border-cyan-400/20">
             <Tv className="w-5 h-5 text-slate-950 stroke-[2.5]" />
           </div>
           <div>
             <h1 className="text-base font-extrabold tracking-wider uppercase bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-blue-400 to-indigo-400">
-              All Live
+              {config.appName || "All Live"}
             </h1>
             <span className="text-[9px] font-mono font-bold tracking-widest text-slate-500 uppercase block">VIDEO PORTAL</span>
           </div>
@@ -533,23 +696,20 @@ export default function App() {
 
           {/* Dynamic alerts center drawer */}
           <NotificationCenter 
-            notifications={config.notifications} 
+            notifications={(config.notifications || []).filter(n => !dismissedNotifIds.includes(n.id))} 
             onDismissOne={handleDismissNotification}
           />
 
-          {/* Admin panel gate toggle button */}
+          {/* Aesthetic Modern Three-dot option button to open Developer, Donations, Feedback features */}
           <button
-            id="admin-view-toggle"
-            onClick={() => setAdminViewOpen(!adminViewOpen)}
-            className={`p-2.5 rounded-2xl border flex items-center gap-1.5 transition-all text-xs font-bold select-none cursor-pointer active:scale-95 duration-200 ${
-              adminViewOpen
-                ? "bg-cyan-400 text-slate-950 border-cyan-400 shadow-md shadow-cyan-400/20"
-                : "bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800"
-            }`}
-            title="অ্যাডমিন কন্ট্রোল"
+            onClick={() => {
+              setMenuModalTab("donation");
+              setMenuModalOpen(true);
+            }}
+            className="p-2 rounded-xl border border-slate-800 transition-all text-xs font-bold select-none cursor-pointer active:scale-95 duration-200 bg-slate-900 text-slate-300 hover:bg-slate-800"
+            title="মেনু (যোগাযোগ, ডোনেশন ও অনুরোধ)"
           >
-            <Sliders className="w-4.5 h-4.5" />
-            <span className="hidden sm:inline">অ্যাডমিন</span>
+            <MoreVertical className="w-4 h-4" />
           </button>
         </div>
       </header>
@@ -571,6 +731,12 @@ export default function App() {
                 config={config} 
                 onSaveConfig={handleSaveConfig}
                 onSyncGoogleSheet={handleSyncGoogleSheet}
+                onUnlock={(p1, p2) => {
+                  setAdminPin1(p1);
+                  setAdminPin2(p2);
+                  sessionStorage.setItem("admin_pin_1", p1);
+                  sessionStorage.setItem("admin_pin_2", p2);
+                }}
               />
             </motion.div>
           ) : (
@@ -608,9 +774,11 @@ export default function App() {
                   <span>প্রিমিয়াম লাইভ ওয়াচার</span>
                 </motion.div>
 
-                <h2 className="text-2xl font-black text-gray-100 font-sans tracking-tight">আপনার সুবিধাজনক বাটন বেছে নিন</h2>
+                <h2 className="text-2xl font-black text-gray-100 font-sans tracking-tight">
+                  {config.adTitle || "আপনার সুবিধাজনক বাটন বেছে নিন"}
+                </h2>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-                  নিচের ওয়াচ বাটনসমূহে ক্লিক করলেই স্পন্সর বিজ্ঞাপনটি শুরু হবে। ৫ সেকেন্ড বিজ্ঞাপন দেখে ওয়েবসাইট উপভোগ করুন।
+                  {config.adDescription || "নিচের ওয়াচ বাটনসমূহে ক্লিক করলেই স্পন্সর বিজ্ঞাপনটি শুরু হবে। ৫ সেকেন্ড বিজ্ঞাপন দেখে ওয়েবসাইট উপভোগ করুন।"}
                 </p>
               </div>
 
@@ -755,100 +923,10 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 👤 DEVELOPER BIOGRAPHY & SOCIAL COMMUNICATIONS */}
-              <div className="bg-slate-900/40 border border-slate-900 rounded-3xl p-5 md:p-6 space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-gradient-to-tr from-cyan-400 to-indigo-600 rounded-2xl flex items-center justify-center border border-cyan-400/20 text-slate-950 font-black text-sm select-all">
-                    {config.devDetails?.avatarInitials || "HK"}
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-extrabold text-gray-200 font-sans">
-                      {config.devDetails?.name || "Md Hasan Khalifa"}
-                    </h3>
-                    <p className="text-[10px] text-slate-400">
-                      {config.devDetails?.subTitle || "অ্যাপ প্রতিষ্ঠাতা ও প্রিমিয়াম ভেন্ডর"}
-                    </p>
-                  </div>
-                </div>
-
-                <p className="text-xs text-slate-400 leading-relaxed font-sans">
-                  {config.devDetails?.description || "প্রিয় ইউজার, অ্যাপে কোনো সমস্যা বা বিজ্ঞাপন ছাড়া প্রমোশন কিনতে চান? অথবা নিজের জন্য এরকম প্রিমিয়াম অ্যাপ তৈরি করতে চান? নিচে আমার অফিসিয়াল সামাজিক লিংক বা হোয়াটসঅ্যাপে সরাসরি যোগাযোগ করতে পারেন।"}
-                </p>
-
-                <div className="flex flex-wrap gap-2.5">
-                  <a
-                    href={`https://wa.me/${config.devDetails?.whatsappNumber || "8801798088609"}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 min-w-[140px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-4 py-2 rounded-xl text-[11px] font-extrabold text-center transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <MessageCircle className="w-4 h-4 fill-emerald-400/10 text-emerald-400" />
-                    <span>WhatsApp Chat</span>
-                  </a>
-                  <a
-                    href={config.devDetails?.facebookUrl || "https://www.facebook.com/HasanKhalifa01"}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex-1 min-w-[140px] bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 px-4 py-2 rounded-xl text-[11px] font-extrabold text-center transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <Sliders className="w-4 h-4 rotate-45 text-blue-400" />
-                    <span>Facebook Profile</span>
-                  </a>
-                </div>
-              </div>
-
-              {/* 📬 FEEDBACK SYSTEM - REQUEST USER CONTENT FORM */}
-              <form onSubmit={handleFeedbackSubmit} className="bg-slate-900/20 border border-slate-900/80 rounded-3xl p-5 md:p-6 space-y-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 bg-indigo-500/15 rounded-xl flex items-center justify-center border border-indigo-500/20">
-                    <MessageSquare className="w-4 h-4 text-indigo-400" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-black tracking-wide text-indigo-400 font-sans uppercase">📬 অনুরোধ ও পরামর্শ কেন্দ্র</h3>
-                    <p className="text-[10px] text-slate-400 mt-0.5">কোন মুভি বা প্রিমিয়াম অ্যাপ এড করতে চান? আপনার মতামত সরাসরি ডেভেলপারের কাছে পাঠান</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">আপনার নাম</label>
-                    <div className="relative">
-                      <User className="absolute left-3.5 top-3 w-4 h-4 text-slate-600" />
-                      <input
-                        type="text"
-                        placeholder="যেমন: হাসান আলী"
-                        value={feedbackName}
-                        onChange={(e) => setFeedbackName(e.target.value)}
-                        className="w-full bg-slate-950 hover:bg-slate-950/80 focus:bg-slate-950 border border-slate-900 focus:border-indigo-500 font-sans text-xs text-white rounded-xl pl-9.5 pr-3.5 py-2.5 outline-none transition-all"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">আপনার অনুরোধ বা মতামত</label>
-                    <textarea
-                      rows={2.5}
-                      placeholder="যেমন: Inshot mod apk এর নতুন ভার্সন এড করুন / Deadpool মুভিটি এড করুন..."
-                      value={feedbackComment}
-                      onChange={(e) => setFeedbackComment(e.target.value)}
-                      className="w-full bg-slate-950 hover:bg-slate-950/80 focus:bg-slate-950 border border-slate-900 focus:border-indigo-500 font-sans text-xs text-white rounded-xl px-3.5 py-2.5 outline-none transition-all resize-none leading-relaxed"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white font-extrabold text-xs py-2.5 rounded-xl transition-all active:scale-98 select-none flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/10 border border-indigo-500/20 cursor-pointer"
-                  >
-                    <Send className="w-3.5 h-3.5 text-white" />
-                    <span>অনুরোধ সাবমিট করুন</span>
-                  </button>
-                </div>
-              </form>
-
               {/* General support instructions card */}
-              <div className="border border-slate-900 rounded-3xl bg-slate-900/15 p-5 flex gap-4 items-center">
+              <div className="border border-slate-900 rounded-3xl bg-slate-900/15 p-5 flex gap-4 items-center justify-center">
                 <ShieldCheck className="w-8 h-8 text-cyan-400 shrink-0" />
-                <div className="space-y-1">
+                <div className="space-y-1 text-left">
                   <h4 className="text-xs font-bold text-gray-200">১00% সুরক্ষিত এবং যাচাইকৃত</h4>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
                     আমাদের ওয়েবসাইট ট্রাফিক ফিল্টারিং এবং প্রক্সি সিকিউরিটির মাধ্যমে আপনার ডেটা পুরোপুরি রক্ষা করা হয়।
@@ -860,16 +938,365 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Decorative footer credits */}
-      <footer className="py-8 bg-slate-950 border-t border-slate-900 text-center space-y-2 relative z-10 max-w-7xl mx-auto w-full mt-auto">
-        <p className="text-[11px] text-slate-500 font-sans tracking-wide">
-          © {new Date().getFullYear()} All Live Inc. সর্বস্বত্ব সংরক্ষিত।
-        </p>
+      {/* 🔮 THREE-DOT OPTIONS POPUP MODAL (DONATIONS, SUGGESTIONS, OWNER PROFILE) */}
+      <AnimatePresence>
+        {menuModalOpen && (
+          <div id="three-dot-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop Blur overlay */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMenuModalOpen(false)}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
+            />
+
+            {/* Modal Box */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 30 }}
+              transition={{ type: "spring", duration: 0.35 }}
+              className="relative max-w-xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-5 md:p-6 shadow-2xl z-15 overflow-hidden flex flex-col max-h-[85vh] text-slate-100"
+            >
+              {/* Background gradient flares */}
+              <div className="absolute top-0 right-0 w-[120px] h-[120px] bg-cyan-500/10 rounded-full blur-2xl pointer-events-none" />
+              <div className="absolute bottom-0 left-0 w-[120px] h-[120px] bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+
+              {/* Header inside the Modal */}
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 mb-4 shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 bg-cyan-950/50 rounded-lg flex items-center justify-center border border-cyan-800/20">
+                    <Sparkles className="w-4 h-4 text-cyan-400" />
+                  </div>
+                  <h3 className="text-sm font-extrabold text-slate-100 font-sans tracking-wide">মাস্টার মেনু সেটিংস</h3>
+                </div>
+                <button
+                  onClick={() => setMenuModalOpen(false)}
+                  className="p-1.5 bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Navigation Tabs - Donation / Feedback / Developer */}
+              <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 shrink-0 mb-4 overflow-x-auto">
+                <button
+                  onClick={() => setMenuModalTab("donation")}
+                  className={`flex-1 min-w-[100px] text-center py-2 px-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                    menuModalTab === "donation"
+                      ? "bg-amber-500/15 border border-amber-500/30 text-amber-400"
+                      : "border border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Heart className="w-3.5 h-3.5" />
+                  <span>সাহায্য ও ডোনেশন</span>
+                </button>
+                <button
+                  onClick={() => setMenuModalTab("feedback")}
+                  className={`flex-1 min-w-[100px] text-center py-2 px-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                    menuModalTab === "feedback"
+                      ? "bg-indigo-500/15 border border-indigo-500/30 text-indigo-400"
+                      : "border border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>অনুরোধ ও পরামর্শ</span>
+                </button>
+                <button
+                  onClick={() => setMenuModalTab("developer")}
+                  className={`flex-1 min-w-[100px] text-center py-2 px-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                    menuModalTab === "developer"
+                      ? "bg-cyan-500/15 border border-cyan-500/30 text-cyan-400"
+                      : "border border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>প্রতিষ্ঠাতা প্রোফাইল</span>
+                </button>
+              </div>
+
+              {/* Scrollable Modal Content */}
+              <div className="flex-1 overflow-y-auto pr-1 space-y-4">
+                {/* TAB 1: Support / Donation */}
+                {menuModalTab === "donation" && (
+                  <div className="space-y-4">
+                    <div className="border border-amber-500/20 bg-amber-500/5 rounded-2xl p-4 md:p-5 space-y-4 relative overflow-hidden">
+                      <div className="flex items-center justify-between gap-2 flex-wrap pb-2 border-b border-amber-500/10">
+                        <div className="text-left">
+                          <h3 className="text-xs font-black tracking-wide text-amber-400 font-sans uppercase">💖 অল লাইভ সাপোর্ট পোর্টাল</h3>
+                          <p className="text-[10px] text-slate-400 mt-0.5">ডেভেলপারকে ডোনেট করে বিজ্ঞাপন-মুক্ত (Ad-Free) সেশন শুরু করুন</p>
+                        </div>
+                        {adFreeActive && (
+                          <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[9px] font-extrabold px-2 py-0.5 rounded-lg animate-pulse">
+                            🚀 অ্যাড-ফ্রি সেশন সক্রিয়
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Info on Mobile Accounts */}
+                      <div className="bg-slate-950 p-3 rounded-xl border border-slate-900 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {[
+                          { name: "bKash (Personal)", num: config.bkashNumber || "01798088609", color: "text-pink-500" },
+                          { name: "Nagad (Personal)", num: config.nagadNumber || "01798088609", color: "text-orange-500" },
+                          { name: "Rocket (Personal)", num: config.rocketNumber || "01798088609", color: "text-purple-500" }
+                        ].map((agent, idx) => (
+                          <div key={idx} className="bg-slate-900/60 p-2 rounded-lg border border-slate-800/40 flex items-center justify-between gap-1">
+                            <div className="text-left">
+                              <span className="text-[8px] text-slate-400 block font-semibold">{agent.name}</span>
+                              <span className={`text-[10px] font-mono font-bold ${agent.color}`}>{agent.num}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(agent.num);
+                                setCopyFeedbackIdx(agent.name);
+                                setTimeout(() => setCopyFeedbackIdx(null), 2000);
+                              }}
+                              className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors cursor-pointer"
+                            >
+                              {copyFeedbackIdx === agent.name ? (
+                                <Check className="w-3 h-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Forms */}
+                      <div className="grid grid-cols-1 gap-4">
+                        {/* Claim Request */}
+                        <form onSubmit={(e) => { e.preventDefault(); handleDonationSubmit(e); }} className="space-y-2 bg-slate-950/70 p-3 rounded-xl border border-slate-900 text-left">
+                          <h4 className="text-[10px] font-bold text-amber-300 font-sans uppercase tracking-wider flex items-center gap-1">
+                            <Coins className="w-3 h-3" /> ডোনেশন বিস্তারিত জমা দিন
+                          </h4>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              placeholder="আপনার নাম"
+                              value={donorName}
+                              onChange={(e) => setDonorName(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-900 focus:border-amber-500 font-sans text-[10px] text-white rounded-lg px-2 py-1.5 outline-none"
+                            />
+                            <input
+                              type="text"
+                              placeholder="পরিমাণ (৳)"
+                              value={donorAmount}
+                              onChange={(e) => setDonorAmount(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-900 focus:border-amber-500 font-sans text-[10px] text-white rounded-lg px-2 py-1.5 outline-none"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="মোবাইল নম্বর অথবা Transaction ID (TxID)"
+                            value={donorPhoneOrTxid}
+                            onChange={(e) => setDonorPhoneOrTxid(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 font-sans text-[10px] text-white rounded-lg px-2.5 py-1.5 outline-none"
+                          />
+                          <button
+                            type="submit"
+                            className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[9px] py-2 rounded-lg transition-all select-none border border-amber-400/20 cursor-pointer"
+                          >
+                            জমা দিন ও লাইসেন্স কি পান
+                          </button>
+                        </form>
+
+                        {/* Verify Claim Key */}
+                        <form onSubmit={(e) => { e.preventDefault(); handleVerifyKeySubmit(e); }} className="space-y-2 bg-slate-950/70 p-3 rounded-xl border border-slate-900 text-left">
+                          <h4 className="text-[10px] font-bold text-cyan-300 font-sans uppercase tracking-wider flex items-center gap-1">
+                            <Lock className="w-3 h-3" /> অ্যাড-ফ্রি লাইসেন্স কোড ভেরিফাই
+                          </h4>
+                          {adFreeActive ? (
+                            <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-lg p-3 text-center space-y-1">
+                              <Check className="w-4 h-4 text-emerald-400 mx-auto" />
+                              <p className="text-[10px] font-bold text-gray-200">বিজ্ঞাপন-মুক্ত লাইসেন্স কোড সফলভাবে যুক্ত আছে।</p>
+                              <p className="text-[8px] text-slate-400 leading-normal">ধন্যবাদ {adFreeUserName}! আপনার এই ব্রাউজার সেশনে আর কোনো ট্রাফিক ইন্টারাপশন বা এ্যাড লোড হবে না।</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <input
+                                type="text"
+                                placeholder="যেমন: ADBLK-H6W7QY"
+                                value={activationKeyInput}
+                                onChange={(e) => setActivationKeyInput(e.target.value)}
+                                className="w-full bg-slate-905 border border-slate-800 focus:border-cyan-500 font-sans text-[10px] text-cyan-400 placeholder-slate-600 rounded-lg px-2 py-1.5 outline-none text-center tracking-widest uppercase"
+                              />
+                              <button
+                                type="submit"
+                                className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-405 hover:to-blue-500 text-slate-950 font-extrabold text-[9px] py-2 rounded-lg cursor-pointer animate-pulse"
+                              >
+                                কোড ভেরিফাই ও বিজ্ঞাপন বন্ধ করুন
+                              </button>
+                            </div>
+                          )}
+                        </form>
+                      </div>
+
+                      {/* Display newly created key pending request */}
+                      <AnimatePresence>
+                        {pendingClaim && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: "auto" }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="bg-slate-950 border border-amber-500/30 rounded-xl p-3 text-center space-y-2"
+                          >
+                            <Sparkles className="w-4 h-4 text-amber-400 mx-auto animate-bounce" />
+                            <h5 className="text-[10px] font-bold text-amber-300">রিকোয়েস্ট সফলভাবে প্রেরণ করা হয়েছে!</h5>
+                            <p className="text-[9px] text-slate-300">
+                              আপনার নাম: <span className="text-white font-semibold">{pendingClaim.userName}</span>
+                            </p>
+                            <div className="bg-slate-900 border border-slate-800 py-1 px-2.5 rounded-lg inline-flex items-center gap-1.5">
+                              <span className="text-xs font-mono font-bold tracking-widest text-cyan-400">{pendingClaim.activationKey}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(pendingClaim.activationKey);
+                                  alert("লাইসেন্স কোডটি সফলভাবে কপি হয়েছে!");
+                                }}
+                                className="text-slate-500 hover:text-white transition-colors"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <p className="text-[8px] text-slate-500 leading-relaxed">
+                              কোডটি কপি করে সেভ রাখুন। পেমেন্ট গেটওয়েতে চেক করে এডমিন ৪-৫ মিনিটের মধ্যে আপনার ডোনেশন দেখে কোডটি অনুমোদন করার পর ভেরিফিকেশন বক্সে সাবমিট করলেই বিজ্ঞাপন স্থায়ীভাবে বন্ধ হয়ে যাবে।
+                            </p>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: Request / Suggestion Suggestive Form */}
+                {menuModalTab === "feedback" && (
+                  <form onSubmit={(e) => { e.preventDefault(); handleFeedbackSubmit(e); }} className="space-y-3 bg-slate-950 p-4 rounded-2xl border border-slate-800/80">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 bg-indigo-500/15 rounded-lg flex items-center justify-center border border-indigo-500/20">
+                        <MessageSquare className="w-4 h-4 text-indigo-400" />
+                      </div>
+                      <div className="text-left">
+                        <h4 className="text-xs font-extrabold text-indigo-400">📬 অনুরোধ ও পরামর্শ কেন্দ্র</h4>
+                        <p className="text-[9px] text-slate-400 mt-0.5">আপনার কাঙ্ক্ষিত মুভি বা প্রিমিয়াম অ্যাপ এড করতে সরাসরি বার্তা পাঠান</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 pt-2 text-left">
+                      <div>
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">আপনার নাম</label>
+                        <div className="relative">
+                          <User className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-600" />
+                          <input
+                            type="text"
+                            placeholder="যেমন: হাসান আলী"
+                            value={feedbackName}
+                            onChange={(e) => setFeedbackName(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 font-sans text-xs text-white rounded-lg pl-8.5 pr-2.5 py-2 outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-1">আপনার অনুরোধ বা মন্তব্য বিবরণ</label>
+                        <textarea
+                          rows={3}
+                          placeholder="যেমন: Inshot mod apk এর নতুন ভার্সন এড করুন / Deadpool মুভিটি এড করুন..."
+                          value={feedbackComment}
+                          onChange={(e) => setFeedbackComment(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-505 font-sans text-xs text-white rounded-lg px-2.5 py-2 outline-none resize-none leading-relaxed"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="w-full bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-400 hover:to-blue-500 text-white font-extrabold text-xs py-2.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>অনুরোধ সাবমিট করুন</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* TAB 3: Developer Info */}
+                {menuModalTab === "developer" && (
+                  <div className="space-y-3 bg-slate-950 p-4 rounded-2xl border border-slate-800/80">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-gradient-to-tr from-cyan-400 to-indigo-600 rounded-xl flex items-center justify-center border border-cyan-400/20 text-slate-950 font-black text-sm select-none">
+                        {config.devDetails?.avatarInitials || "HK"}
+                      </div>
+                      <div className="text-left">
+                        <h3 className="text-sm font-extrabold text-gray-200 font-sans">
+                          {config.devDetails?.name || "Md Hasan Khalifa"}
+                        </h3>
+                        <p className="text-[10px] text-slate-400">
+                          {config.devDetails?.subTitle || "অ্যাপ প্রতিষ্ঠাতা ও প্রিমিয়াম ভেন্ডর"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-400 leading-relaxed font-sans text-left bg-slate-900/50 p-3 rounded-lg border border-slate-900/30">
+                      {config.devDetails?.description || "প্রিয় ইউজার, অ্যাপে কোনো সমস্যা বা বিজ্ঞাপন ছাড়া প্রমোশন কিনতে চান? অথবা নিজের জন্য এরকম প্রিমিয়াম অ্যাপ তৈরি করতে চান? নিচে আমার অফিসিয়াল সামাজিক লিংক বা হোয়াটসঅ্যাপে সরাসরি যোগাযোগ করতে পারেন।"}
+                    </p>
+
+                    <div className="flex flex-wrap gap-2.5 pt-1.5">
+                      <a
+                        href={`https://wa.me/${config.devDetails?.whatsappNumber || "8801798088609"}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 min-w-[124px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-3 py-2 rounded-lg text-[10px] font-extrabold text-center flex items-center justify-center gap-1"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5 fill-emerald-400/10 text-emerald-400" />
+                        <span>WhatsApp Chat</span>
+                      </a>
+                      <a
+                        href={config.devDetails?.facebookUrl || "https://www.facebook.com/HasanKhalifa01"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 min-w-[124px] bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 px-3 py-2 rounded-lg text-[10px] font-extrabold text-center flex items-center justify-center gap-1"
+                      >
+                        <Sliders className="w-3.5 h-3.5 rotate-45 text-blue-400" />
+                        <span>Facebook Profile</span>
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Verified Badge */}
+              <div className="pt-3 border-t border-slate-800/60 mt-3 flex items-center gap-2 justify-center text-slate-500 shrink-0 select-none">
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-500" />
+                <span className="text-[10px] tracking-wide font-sans font-medium">১০০% সুরক্ষিত প্ল্যাটফর্ম ও প্রক্সি সিকিউরিটি</span>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+    {/* Decorative footer credits - ADMIN ENTRY SITUATED AT EXTREME OPPOSITE END ACCORDING TO SPECS */}
+    <footer className="py-6 bg-slate-950 border-t border-slate-900 text-center space-y-2.5 relative z-10 max-w-7xl mx-auto w-full mt-auto px-4 flex flex-col sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-[11px] text-slate-500 font-sans tracking-wide">
+        © {new Date().getFullYear()} All Live Inc. সর্বস্বত্ব সংরক্ষিত।
+      </p>
+      <div className="flex flex-wrap items-center justify-center gap-3.5">
         <p className="text-[9px] text-slate-600 font-mono tracking-widest uppercase flex items-center justify-center gap-1">
           <Smartphone className="w-3.5 h-3.5" />
           Mobile Web Application Platform v2.4
         </p>
-      </footer>
+        
+        {/* Subtle, extremely obscure and hidden link for the Admin Panel toggle to protect against prompt/easy exposure */}
+        <button 
+          onClick={() => setAdminViewOpen(!adminViewOpen)}
+          className="text-[9px] text-slate-800 hover:text-slate-600 font-mono font-bold tracking-wider transition-colors cursor-pointer select-none active:scale-95 ml-2 border border-slate-900/60 rounded px-1.5 py-0.5"
+          title="Sittings"
+        >
+          🔧 ADMIN GATEWAY
+        </button>
+      </div>
+    </footer>
 
       {/* RENDER ACTIVE IN-APP MOBILE WEB BROWSER POPUP */}
       <AnimatePresence>
@@ -878,6 +1305,7 @@ export default function App() {
             url={activeBrowserUrl} 
             title={activeBrowserTitle} 
             onExit={handleBrowserExit} 
+            backButtonText={config.backButtonText}
           />
         )}
       </AnimatePresence>

@@ -34,7 +34,7 @@
     }
   ],
   "adConfig": {
-    "adsEnabled": true,
+    "adsEnabled": false,
     "startappAppId": "203918239",
     "monetagZoneId": "7309121",
     "videoDurationSeconds": 5,
@@ -55,11 +55,12 @@
       "message": "যেকোনো বাটনে ক্লিক করুন এবং ৫ সেকেন্ডের ভিডিও বিজ্ঞাপন সম্পূর্ণ দেখে অটোমেটিক পেজ লোড করুন।",
       "type": "info",
       "sentAt": "2026-06-21T06:55:00Z",
-      "active": false
+      "active": true
     }
   ],
   "googleSheetsId": "",
-  "adminCode": "2545",
+  "adminCode": "1234",
+  "adminCodeSecondary": "5678",
   "securityQuestion": "আপনার প্রিয় রঙের নাম কী?",
   "securityAnswer": "নীল",
   "premiumItems": [

@@ -3,23 +3,27 @@ import {
   motion 
 } from "motion/react";
 import { 
-  Lock, Settings, Plus, Trash2, Sheet, Bell, Save, LogOut, Check, HelpCircle, RefreshCw, Eye, EyeOff, AlertCircle, X, Sparkles, MessageSquare, User
+  Lock, Settings, Plus, Trash2, Sheet, Bell, Save, LogOut, Check, HelpCircle, RefreshCw, Eye, EyeOff, AlertCircle, X, Sparkles, MessageSquare, User, Heart, ShieldCheck
 } from "lucide-react";
 import { AppConfig, AppButton, NotificationItem, PremiumItem } from "../types";
 
 interface AdminPanelProps {
   config: AppConfig;
-  onSaveConfig: (updated: AppConfig) => Promise<boolean>;
-  onSyncGoogleSheet: (sheetsId: string) => Promise<{ success: boolean; message: string; config?: AppConfig }>;
+  onSaveConfig: (updated: AppConfig, pin1?: string, pin2?: string) => Promise<boolean>;
+  onSyncGoogleSheet: (sheetsId: string, pin1?: string, pin2?: string) => Promise<{ success: boolean; message: string; config?: AppConfig }>;
+  onUnlock?: (pin1: string, pin2: string) => void;
 }
 
-export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: AdminPanelProps) {
-  const [pinInput, setPinInput] = useState("");
+export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet, onUnlock }: AdminPanelProps) {
+  // Staggered Two-Step PIN authentication states
+  const [loginStep, setLoginStep] = useState<1 | 2>(1);
+  const [pinInput1, setPinInput1] = useState("");
+  const [pinInput2, setPinInput2] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [loginError, setLoginError] = useState("");
   
   // Dashboard navigation sub-tabs
-  const [activeTab, setActiveTab] = useState<"buttons" | "sheets" | "ads" | "notif" | "premium" | "feedbacks">("buttons");
+  const [activeTab, setActiveTab] = useState<"buttons" | "sheets" | "ads" | "notif" | "premium" | "feedbacks" | "developer" | "donations" | "security">("buttons");
 
   // Form states
   const [localConfig, setLocalConfig] = useState<AppConfig>({ ...config });
@@ -30,7 +34,8 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
   const [showRecForm, setShowRecForm] = useState(false);
   const [recAnswer, setRecAnswer] = useState("");
   const [recError, setRecError] = useState("");
-  const [newFwdPin, setNewFwdPin] = useState("");
+  const [recNewPin1, setRecNewPin1] = useState("");
+  const [recNewPin2, setRecNewPin2] = useState("");
 
   // Sync state
   const [sheetIdInput, setSheetIdInput] = useState(config.googleSheetsId || "");
@@ -54,7 +59,8 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
   });
 
   // Change Pin state
-  const [newPinCode, setNewPinCode] = useState("");
+  const [secPinInput1, setSecPinInput1] = useState("");
+  const [secPinInput2, setSecPinInput2] = useState("");
 
   // Developer Profile states
   const [devName, setDevName] = useState(config.devDetails?.name || "Md Hasan Khalifa");
@@ -73,14 +79,65 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
   const [newPremUrl, setNewPremUrl] = useState("");
   const [newPremBtnText, setNewPremBtnText] = useState("");
 
-  // Verify PIN
-  const handleLogin = (e: React.FormEvent) => {
+  // Mobile Financial Services state
+  const [bkashNumInput, setBkashNumInput] = useState(config.bkashNumber || "01798088609");
+  const [nagadNumInput, setNagadNumInput] = useState(config.nagadNumber || "01798088609");
+  const [rocketNumInput, setRocketNumInput] = useState(config.rocketNumber || "01798088609");
+
+  // Security Q/A state
+  const [securityQInput, setSecurityQInput] = useState(config.securityQuestion || "আপনার প্রিয় রঙের নাম কী?");
+  const [securityAInput, setSecurityAInput] = useState(config.securityAnswer || "নীল");
+
+  // Verify PIN sequence
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput === localConfig.adminCode || pinInput === "1234") {
-      setIsUnlocked(true);
-      setLoginError("");
+    setLoginError("");
+
+    if (loginStep === 1) {
+      const pin1 = pinInput1.trim();
+      if (!pin1) return;
+
+      try {
+        const response = await fetch("/api/admin/verify-step1", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pin1 })
+        });
+
+        if (response.ok) {
+          setLoginStep(2);
+        } else {
+          setLoginError("ভুল প্রথম পিন কোড! অনুগ্রহ করে আবার চেষ্টা করুন।");
+        }
+      } catch (err) {
+        setLoginError("নেটওয়ার্ক সংযোগ ত্রুটি! প্রথম পিন পরীক্ষা করা যাচ্ছে না।");
+      }
     } else {
-      setLoginError("ভুল পিন কোড! অনুগ্রহ করে আবার চেষ্টা করুন।");
+      const pin2 = pinInput2.trim();
+      if (!pin2) return;
+
+      try {
+        const response = await fetch("/api/admin/verify-pin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pin1: pinInput1.trim(), pin2 })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.config) {
+            setLocalConfig(data.config);
+            setIsUnlocked(true);
+            onUnlock?.(pinInput1.trim(), pin2);
+          } else {
+            setLoginError("ভুল দ্বিতীয় পিন কোড! অল লাইভ অ্যাক্সেস প্রত্যাখ্যাত।");
+          }
+        } else {
+          setLoginError("ভুল দ্বিতীয় পিন কোড! অল লাইভ অ্যাক্সেস প্রত্যাখ্যাত।");
+        }
+      } catch (err) {
+        setLoginError("নেটওয়ার্ক সংযোগ ত্রুটি! দ্বিতীয় পিন পরীক্ষা করা যাচ্ছে না।");
+      }
     }
   };
 
@@ -95,13 +152,18 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
     setDevFacebook(config.devDetails?.facebookUrl || "https://www.facebook.com/HasanKhalifa01");
     setDevAvatarInitials(config.devDetails?.avatarInitials || "HK");
     setFeedbackSheetUrlInput(config.feedbackSheetUrl || "");
+    setBkashNumInput(config.bkashNumber || "01798088609");
+    setNagadNumInput(config.nagadNumber || "01798088609");
+    setRocketNumInput(config.rocketNumber || "01798088609");
+    setSecurityQInput(config.securityQuestion || "আপনার প্রিয় রঙের নাম কী?");
+    setSecurityAInput(config.securityAnswer || "নীল");
   };
 
-  // Trigger global save
+  // Trigger global save with secure pass headers
   const handleSaveToDatabase = async (updatedState: AppConfig) => {
     setSaveStatus("saving");
     setSaveMessage("সেভ করা হচ্ছে...");
-    const success = await onSaveConfig(updatedState);
+    const success = await onSaveConfig(updatedState, pinInput1.trim(), pinInput2.trim());
     if (success) {
       setSaveStatus("success");
       setSaveMessage("অল লাইভ সেটিংস সফলভাবে সেভ হয়েছে!");
@@ -327,7 +389,7 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
         description: devDescription.trim(),
         whatsappNumber: devWhatsapp.trim(),
         facebookUrl: devFacebook.trim(),
-        avatarInitials: devAvatarInitials.trim() || "HK"
+        avatarInitials: devAvatarInitials.trim() || 'HK'
       },
       feedbackSheetUrl: feedbackSheetUrlInput.trim()
     };
@@ -347,55 +409,175 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
     setLocalConfig(updatedConfig);
   };
 
-  // Handle PIN save
-  const handleSaveNewPin = (newPin: string) => {
-    const trimmed = newPin.trim();
-    if (!trimmed || trimmed.length < 4) {
-      alert("পিন কোড অবশ্যই নূন্যতম ৪ ডিজিটের হতে হবে!");
-      return;
-    }
-    const updatedConfig = {
+  // Save payments gateways
+  const handleSavePaymentNumbers = () => {
+    const updatedConfig: AppConfig = {
       ...localConfig,
-      adminCode: trimmed
+      bkashNumber: bkashNumInput.trim(),
+      nagadNumber: nagadNumInput.trim(),
+      rocketNumber: rocketNumInput.trim()
     };
     setLocalConfig(updatedConfig);
     handleSaveToDatabase(updatedConfig);
-    setNewPinCode("");
-    alert(`নতুন পিন কোডটি সফলভাবে আপডেট করা হয়েছে! (আপনার নতুন পিন: ${trimmed})`);
+    alert('মোবাইল ব্যাংকিং পেমেন্ট গেটওয়ে নাম্বারসমূহ সফলভাবে সেভ করা হয়েছে!');
+  };
+
+  // Save Security Details (Twin PINs and Q/A)
+  const handleSaveSecuritySettings = (primaryPin: string, secondaryPin: string, q: string, a: string) => {
+    const p1 = primaryPin.trim();
+    const p2 = secondaryPin.trim();
+    if (!p1 || p1.length < 4 || !p2 || p2.length < 4) {
+      alert('১ম এবং ২য় পিন উভয়ই অবশ্যই কমপক্ষে ৪ সংখ্যার হতে হবে!');
+      return;
+    }
+    const updatedConfig: AppConfig = {
+      ...localConfig,
+      adminCode: p1,
+      adminCodeSecondary: p2,
+      securityQuestion: q.trim(),
+      securityAnswer: a.trim()
+    };
+    setLocalConfig(updatedConfig);
+    handleSaveToDatabase(updatedConfig);
+    alert('আপনার ডাবল প্রটেকশন সিকিউরিটি পিন ও প্রশ্নের উত্তর সফলভাবে সেভ করা হয়েছে!');
+  };
+
+  // Moderate donation keys/records
+  const handleApproveKey = (userKey: string) => {
+    const adFree = localConfig.adFreeUsers || [];
+    const targetUser = adFree.find(u => u.activationKey === userKey);
+    const duration = targetUser?.duration || "permanent";
+
+    // Calculate expiryDate
+    let expiryDate: string = "permanent";
+    const now = new Date();
+    if (duration === "1day") {
+      now.setDate(now.getDate() + 1);
+      expiryDate = now.toISOString();
+    } else if (duration === "1month") {
+      now.setMonth(now.getMonth() + 1);
+      expiryDate = now.toISOString();
+    } else if (duration === "1year") {
+      now.setFullYear(now.getFullYear() + 1);
+      expiryDate = now.toISOString();
+    }
+
+    const updatedUsers = adFree.map(u => {
+      if (u.activationKey === userKey) {
+        return { 
+          ...u, 
+          status: 'approved' as const,
+          duration,
+          expiryDate
+        };
+      }
+      return u;
+    });
+    const updatedConfig = {
+      ...localConfig,
+      adFreeUsers: updatedUsers
+    };
+    setLocalConfig(updatedConfig);
+    handleSaveToDatabase(updatedConfig);
+    alert(`বিজ্ঞাপন মুক্ত সুবিধাটি ${duration === "1day" ? "১ দিন" : duration === "1month" ? "১ মাস" : duration === "1year" ? "১ বছর" : "স্থায়ী"} মেয়াদে অনুমোদিত করা হয়েছে!`);
+  };
+
+  const handleUpdateUserDuration = (userKey: string, duration: "1day" | "1month" | "1year" | "permanent" | "expired") => {
+    let expiryDate: string = "permanent";
+    const now = new Date();
+    if (duration === "1day") {
+      now.setDate(now.getDate() + 1);
+      expiryDate = now.toISOString();
+    } else if (duration === "1month") {
+      now.setMonth(now.getMonth() + 1);
+      expiryDate = now.toISOString();
+    } else if (duration === "1year") {
+      now.setFullYear(now.getFullYear() + 1);
+      expiryDate = now.toISOString();
+    } else if (duration === "expired") {
+      expiryDate = "expired";
+    }
+
+    const adFree = localConfig.adFreeUsers || [];
+    const updatedUsers = adFree.map(u => {
+      if (u.activationKey === userKey) {
+        return { 
+          ...u, 
+          duration,
+          expiryDate,
+          status: duration === "expired" ? 'pending' as const : u.status
+        };
+      }
+      return u;
+    });
+    const updatedConfig = {
+      ...localConfig,
+      adFreeUsers: updatedUsers
+    };
+    setLocalConfig(updatedConfig);
+    handleSaveToDatabase(updatedConfig);
+    alert(`মেয়াদ পরিবর্তন করে '${duration === "1day" ? "১ দিন" : duration === "1month" ? "১ মাস" : duration === "1year" ? "১ বছর" : duration === "expired" ? "expired" : "স্থায়ী"}' করা হয়েছে!`);
+  };
+
+  const handleRevokeKey = (userKey: string) => {
+    if (!confirm('আপনি কি নিশ্চিতভাবে এই বিজ্ঞাপন মুক্ত সুবিধা বাতিল করতে চান?')) return;
+    const adFree = localConfig.adFreeUsers || [];
+    const updatedUsers = adFree.filter(u => u.activationKey !== userKey);
+    const updatedConfig = {
+      ...localConfig,
+      adFreeUsers: updatedUsers
+    };
+    setLocalConfig(updatedConfig);
+    handleSaveToDatabase(updatedConfig);
+    alert('বিজ্ঞাপন মুক্ত সুবিধাটি বাতিল করা হয়েছে!');
   };
 
   if (!isUnlocked) {
-    const handleRecoverPinWithQuestion = (e: React.FormEvent) => {
+    const handleRecoverPinWithQuestion = async (e: React.FormEvent) => {
       e.preventDefault();
       const ansInput = recAnswer.trim();
-      const questionAns = (config.securityAnswer || "নীল").trim();
-      const fwdPin = newFwdPin.trim();
+      const p1 = recNewPin1.trim();
+      const p2 = recNewPin2.trim();
 
-      if (!ansInput || !fwdPin) {
-        setRecError("অনুগ্রহ করে প্রশ্নের সঠিক উত্তর এবং নতুন পিন কোড দুটোই দিন!");
+      if (!ansInput || !p1 || !p2) {
+        setRecError("অনুগ্রহ করে প্রশ্নের সঠিক উত্তর এবং নতুন দুটো পিন কোডই দিন!");
         return;
       }
 
-      if (fwdPin.length < 4) {
-        setRecError("নতুন পিন কোড অবশ্যই নূন্যতম ৪ সংখ্যার হতে হবে!");
+      if (p1.length < 4 || p2.length < 4) {
+        setRecError("পিন কোড দুটোই কমপক্ষে ৪ ডিজিটের হতে হবে!");
         return;
       }
 
-      if (ansInput.toLowerCase() === questionAns.toLowerCase()) {
-        const resetConfig = {
-          ...localConfig,
-          adminCode: fwdPin
-        };
-        setLocalConfig(resetConfig);
-        onSaveConfig(resetConfig);
-        alert(`অভিনন্দন! সঠিক উত্তর দিয়েছেন। আপনার পিন কোডটি সফলভাবে আপডেট করে "${fwdPin}" করা হয়েছে। আমরা ড্যাশবোর্ডটি আনলক করে দিয়েছি।`);
-        setIsUnlocked(true);
-        setShowRecForm(false);
-        setRecAnswer("");
-        setNewFwdPin("");
-        setRecError("");
-      } else {
-        setRecError("নিরাপত্তা প্রশ্নের উত্তরটি ভুল হয়েছে! আবার চেষ্টা করুন।");
+      try {
+        const response = await fetch("/api/admin/verify-recovery", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answer: ansInput, pin1: p1, pin2: p2 })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            alert(`অভিনন্দন! সঠিক উত্তর দিয়েছেন। নতুন পিনদ্বয় সেট করা হয়েছে (১ম পিন: ${p1}, ২য় পিন: ${p2})।`);
+            setPinInput1(p1);
+            setPinInput2(p2);
+            setLoginStep(2);
+            setIsUnlocked(true);
+            onUnlock?.(p1, p2);
+            setShowRecForm(false);
+            setRecAnswer("");
+            setRecNewPin1("");
+            setRecNewPin2("");
+            setRecError("");
+          } else {
+            setRecError("নিরাপত্তা প্রশ্নের উত্তরটি ভুল হয়েছে! আবার চেষ্টা করুন।");
+          }
+        } else {
+          setRecError("নিরাপত্তা প্রশ্নের উত্তরটি ভুল হয়েছে! আবার চেষ্টা করুন।");
+        }
+      } catch (err) {
+        setRecError("সার্ভার ভেরিফিকেশন সংযোগ ব্যর্থ হয়েছে।");
       }
     };
 
@@ -407,25 +589,42 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
               <div className="w-14 h-14 bg-cyan-950/40 border border-cyan-800 rounded-2xl flex items-center justify-center mx-auto text-cyan-400">
                 <Lock className="w-6 h-6 animate-pulse" />
               </div>
-              <h2 className="text-xl font-bold text-gray-100 font-sans">অ্যাডমিন কন্ট্রোল গেট</h2>
-              <p className="text-xs text-slate-400 font-sans">
-                অ্যাপের বাটন নাম, লিংক, লোগো এবং বিজ্ঞাপন সেটিংস পরিবর্তন করতে অ্যাডমিন পিন কোড দিন।
+              <h2 className="text-xl font-bold text-gray-100 font-sans">ডাবল প্রটেকশন অ্যাডমিন লক 🔐</h2>
+              <p className="text-xs text-slate-400 font-sans leading-relaxed">
+                {loginStep === 1 
+                  ? "ধাপ ১: আপনার প্রথম প্রাইমারি এডমিন পিন কোডটি দিন।" 
+                  : "ধাপ ২: চমৎকার! এবার অ্যাক্সেস কনফার্ম করতে আপনার দ্বিতীয় নিরাপত্তা পিনটি দিন।"}
               </p>
             </div>
 
             <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block">ADMIN PIN CODE</label>
-                <input
-                  type="password"
-                  placeholder="পিন কোড লিখুন"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 text-center text-lg font-mono tracking-widest text-cyan-400 outline-none"
-                  value={pinInput}
-                  onChange={(e) => setPinInput(e.target.value)}
-                  maxLength={8}
-                  autoFocus
-                />
-              </div>
+              {loginStep === 1 ? (
+                <div className="space-y-1.5 focus-within:scale-[1.01] transition-all">
+                  <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block font-bold text-center">PRIMARY ADMIN PIN (STEP 1)</label>
+                  <input
+                    type="password"
+                    placeholder="প্রথম পিন কোড দিন (যেমন: 1234)"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 text-center text-lg font-mono tracking-widest text-cyan-400 outline-none"
+                    value={pinInput1}
+                    onChange={(e) => setPinInput1(e.target.value)}
+                    maxLength={12}
+                    autoFocus
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1.5 focus-within:scale-[1.01] transition-all">
+                  <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block font-bold text-center">SECONDARY SECURITY PIN (STEP 2)</label>
+                  <input
+                    type="password"
+                    placeholder="দ্বিতীয় পিন কোড দিন"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 text-center text-lg font-mono tracking-widest text-emerald-400 outline-none"
+                    value={pinInput2}
+                    onChange={(e) => setPinInput2(e.target.value)}
+                    maxLength={12}
+                    autoFocus
+                  />
+                </div>
+              )}
 
               {loginError && (
                 <div className="p-3 bg-rose-950/20 border border-rose-500/20 rounded-xl flex items-center gap-2 text-xs text-rose-400 font-sans">
@@ -437,10 +636,20 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
               <div className="space-y-2 pt-2">
                 <button
                   type="submit"
-                  className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 hover:opacity-90 active:scale-95 text-slate-950 font-bold py-3.5 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-400/10 cursor-pointer text-center"
+                  className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-600 hover:opacity-90 active:scale-95 text-slate-950 font-extrabold py-3.5 rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-cyan-400/10 cursor-pointer text-center animate-pulse"
                 >
-                  আনলক ড্যাশবোর্ড
+                  {loginStep === 1 ? "কন্টিনিউ (পরবর্তী ধাপ)" : "ড্যাশবোর্ড আনলক করুন"}
                 </button>
+
+                {loginStep === 2 && (
+                  <button
+                    type="button"
+                    onClick={() => { setLoginStep(1); setLoginError(""); }}
+                    className="w-full bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold py-2 rounded-xl text-xs cursor-pointer text-center"
+                  >
+                    প্রথম ধাপে ফিরে যান
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -458,13 +667,13 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
               <div className="w-14 h-14 bg-indigo-950/40 border border-indigo-850 rounded-2xl flex items-center justify-center mx-auto text-indigo-400">
                 <HelpCircle className="w-6 h-6 animate-pulse" />
               </div>
-              <h2 className="text-xl font-bold text-gray-100 font-sans">নিরাপত্তা পিন উদ্ধার</h2>
+              <h2 className="text-xl font-bold text-gray-100 font-sans font-black">ডাবল পিন উদ্ধার (Reset)</h2>
               <p className="text-xs text-slate-400 font-sans">
-                আপনার আগে সেট করা নিরাপত্তা প্রশ্নের সঠিক উত্তর দিয়ে একটি নতুন পিন কোড সেট করুন।
+                আপনার আগে সেট করা নিরাপত্তা প্রশ্নের সঠিক উত্তর দিয়ে নতুন দুটি পিন কোড সেট করুন।
               </p>
             </div>
 
-            <form onSubmit={handleRecoverPinWithQuestion} className="space-y-4">
+            <form onSubmit={handleRecoverPinWithQuestion} className="space-y-4 text-left">
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-center space-y-1">
                 <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">নিরাপত্তা প্রশ্ন</span>
                 <p className="text-sm font-extrabold text-indigo-400 font-sans">
@@ -476,8 +685,8 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
                 <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block font-bold">প্রশ্নের সঠিক উত্তর</label>
                 <input
                   type="text"
-                  placeholder="প্রশ্নের উত্তর দিন"
-                  className="w-full bg-slate-950 border border-slate-805 focus:border-indigo-500 rounded-xl px-4 py-2.5 text-xs text-white outline-none font-sans"
+                  placeholder="প্রশ্নের উত্তর দিন (যেমন: নীল)"
+                  className="w-full bg-slate-950 border border-slate-850 focus:border-indigo-500 rounded-xl px-4 py-2.5 text-xs text-white outline-none font-sans"
                   value={recAnswer}
                   onChange={(e) => setRecAnswer(e.target.value)}
                   maxLength={45}
@@ -485,20 +694,33 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono text-slate-400 uppercase tracking-widest block font-bold">নতুন পিন কোড সেট করুন</label>
-                <input
-                  type="text"
-                  placeholder="যেমন: ৪৩২১"
-                  className="w-full bg-slate-950 border border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-2.5 text-xs font-mono tracking-wider text-cyan-400 outline-none"
-                  value={newFwdPin}
-                  onChange={(e) => setNewFwdPin(e.target.value)}
-                  maxLength={10}
-                />
+              <div className="grid grid-cols-2 gap-2 text-left">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono text-slate-400 uppercase block font-bold">নতুন পিন ১ (Primary)</label>
+                  <input
+                    type="password"
+                    placeholder="যেমন: 1234"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-3 py-2 text-xs font-mono text-center tracking-widest text-cyan-400 outline-none"
+                    value={recNewPin1}
+                    onChange={(e) => setRecNewPin1(e.target.value)}
+                    maxLength={12}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono text-slate-400 uppercase block font-bold">নতুন পিন ২ (Secondary)</label>
+                  <input
+                    type="password"
+                    placeholder="যেমন: 5678"
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-mono text-center tracking-widest text-emerald-400 outline-none"
+                    value={recNewPin2}
+                    onChange={(e) => setRecNewPin2(e.target.value)}
+                    maxLength={12}
+                  />
+                </div>
               </div>
 
               {recError && (
-                <div className="p-3 bg-rose-950/20 border border border-rose-500/20 rounded-xl flex items-center gap-2 text-xs text-rose-450 font-sans">
+                <div className="p-3 bg-rose-950/20 border border-rose-500/20 rounded-xl flex items-center gap-2 text-xs text-rose-455 font-sans">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{recError}</span>
                 </div>
@@ -517,7 +739,8 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
                   onClick={() => {
                     setShowRecForm(false);
                     setRecAnswer("");
-                    setNewFwdPin("");
+                    setRecNewPin1("");
+                    setRecNewPin2("");
                     setRecError("");
                   }}
                   className="w-full bg-transparent text-slate-400 hover:text-slate-200 font-bold py-2 rounded-xl text-xs cursor-pointer transition-all text-center"
@@ -661,6 +884,30 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
           >
             <User className="w-3.5 h-3.5 shrink-0" />
             <span>প্রোফাইল ও অটোমেশন (Developer Info)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("donations")}
+            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold whitespace-nowrap transition-all border-b-2 cursor-pointer shrink-0 ${
+              activeTab === "donations" 
+                ? "border-cyan-400 text-cyan-400 bg-cyan-500/5" 
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Heart className="w-3.5 h-3.5 shrink-0 text-pink-400" />
+            <span>ডোনেশন ও বিজ্ঞাপন অনুমোদন ({localConfig.adFreeUsers?.length || 0})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("security")}
+            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold whitespace-nowrap transition-all border-b-2 cursor-pointer shrink-0 ${
+              activeTab === "security" 
+                ? "border-cyan-400 text-cyan-400 bg-cyan-500/5" 
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5 shrink-0 text-yellow-400" />
+            <span>পাসওয়ার্ড ও সিকিউরিটি</span>
           </button>
         </div>
       </div>
@@ -819,24 +1066,86 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
               </div>
 
               {/* Instructions list */}
-              <div className="space-y-3 text-xs leading-relaxed text-slate-300">
-                <p className="font-bold text-gray-100 flex items-center gap-1 h-fit">
-                  <HelpCircle className="w-4.5 h-4.5 text-cyan-400" />
-                  কীভাবে শিট আইডি পাবেন ও সেটআপ করবেন?
+              <div className="space-y-4 text-xs leading-relaxed text-slate-300">
+                <p className="font-bold text-gray-150 flex items-center gap-1.5 h-fit text-sm">
+                  <HelpCircle className="w-5 h-5 text-cyan-400" />
+                  গুগল স্প্রেডশিট লিংক কানেক্ট করার পূর্ণাঙ্গ নিয়মাবলী
                 </p>
 
-                <ol className="list-decimal list-inside space-y-1.5 pl-2 text-slate-400">
-                  <li>প্রথমে একটি গুগল স্প্রেডশিট খুলুন।</li>
-                  <li>শিটের প্রথম লাইনে অবশ্যই নিচের মতো সঠিক কলামের নাম ও বানান লিখুন (প্রথম অক্ষর বড় বা ছোটও হতে পারে):
-                    <div className="my-2 p-2 bg-slate-900 border border-slate-800/80 rounded-lg overflow-x-auto select-all font-mono text-[10px] text-emerald-400">
-                      ID, Name, Logo, Link, Network, Status
+                <ol className="list-decimal list-inside space-y-2.5 pl-1.5 text-slate-400 font-sans">
+                  <li>আপনার গুগল ড্রাইভ থেকে একটি নতুন <b>Google Spreadsheet</b> তৈরি করুন।</li>
+                  <li>স্প্রেডশিটের একদম প্রথম র-তে (Row 1) হুবহু নিচের কলামের নামগুলি লিখুন (বানান যেন ভুল না হয়):
+                    <div className="my-2 p-2.5 bg-slate-900 border border-slate-800/80 rounded-xl overflow-x-auto select-all font-mono text-[10.5px] text-emerald-400 flex gap-4 font-bold">
+                      <span>A: ID</span>
+                      <span>B: Name</span>
+                      <span>C: Logo</span>
+                      <span>D: Link</span>
+                      <span>E: Network</span>
+                      <span>F: Status</span>
                     </div>
                   </li>
-                  <li>শিটের কলামগুলোতে প্রয়োজনীয় বাটন ডাটা পূরণ করুন (যেমন: Watch 1, 🎥, https://wikipedia.org, monetag, active)।</li>
-                  <li>স্প্রেডশিটের শেয়ারিং সেটিংস থেকে অবশ্যই জেনেরাল এক্সেস পরিবর্তন করে <b>“Anyone with the link can view (ভিসিটর হিসেবে যে কেউ)”</b> অপশন সিলেক্ট করুন।</li>
-                  <li>ব্রাউজারের এড্রেস বার থেকে শিট আইডিটি কপি করে নিচে পেস্ট করুন। যেমন:
-                    <span className="block text-[10px] select-all bg-slate-900 border border-slate-800/40 p-1 rounded font-mono text-cyan-400 mt-1">
-                      https://docs.google.com/spreadsheets/d/<span className="text-amber-400 underline font-bold font-sans">1Bxxxx_spreadsheet-id_xxx</span>/edit#gid=0
+                  <li>
+                    <span className="text-gray-200 font-bold">কলামসমূহের বিস্তারিত পরিচিতি ও উদাহরণ:</span>
+                    <ul className="list-disc list-inside space-y-1 pl-4 text-slate-400 mt-1">
+                      <li><b className="text-slate-300 font-mono">ID:</b> প্রতিটি বাটনের স্বতন্ত্র ইউনিক আইডি (যেমন: <code>live_1</code>, <code>watch_sport_2</code>)।</li>
+                      <li><b className="text-slate-300 font-mono">Name:</b> বাটনে যে লেখাটি মানুষের নিকট প্রদর্শন করবেন (যেমন: <code>Star Sports 1 HD</code>)।</li>
+                      <li><b className="text-slate-300 font-mono">Logo:</b> বাটনে লেখার বাম পাশে যে ইমোজি বা চিহ্ন থাকবে (যেমন: 📺, 🎥, ⚽)।</li>
+                      <li><b className="text-slate-300 font-mono">Link:</b> বাটনটিতে স্পর্শ করলেই যে ওয়েব লিংক বা স্ট্রিমিং ইউআরএল ওপেন হবে।</li>
+                      <li><b className="text-slate-300 font-mono">Network:</b> লিংকে প্রবেশের আগে যে এড চালু করতে চান তা সিলেক্ট করতে (<code>startapp</code> বা <code>monetag</code> লিখুন, এড ছাড়া ওপেন করতে <code>none</code> লিখুন)।</li>
+                      <li><b className="text-slate-300 font-mono">Status:</b> বাটনটি অ্যাপে দেখাতে চাইলে <code>active</code> লিখুন, হাইড বা নিষ্ক্রিয় করে রাখতে চাইলে <code>inactive</code> লিখুন।</li>
+                    </ul>
+
+                    {/* Highly stylized example table representing spreadsheet structure */}
+                    <div className="overflow-x-auto border border-slate-800/80 rounded-xl mt-3.5 bg-slate-900/20 max-w-full">
+                      <table className="min-w-full divide-y divide-slate-800/50 text-[10.5px] font-sans">
+                        <thead className="bg-slate-950 text-slate-400 font-mono font-bold">
+                          <tr>
+                            <th className="px-3 py-2 text-left border-r border-slate-800/30">Row No.</th>
+                            <th className="px-3 py-2 text-left border-r border-slate-800/30">A (ID)</th>
+                            <th className="px-3 py-2 text-left border-r border-slate-800/30">B (Name)</th>
+                            <th className="px-3 py-2 text-left border-r border-slate-800/30">C (Logo)</th>
+                            <th className="px-3 py-2 text-left border-r border-slate-800/30">D (Link)</th>
+                            <th className="px-3 py-2 text-left border-r border-slate-800/30">E (Network)</th>
+                            <th className="px-3 py-2 text-left">F (Status)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-850 text-slate-300 font-mono">
+                          <tr className="bg-cyan-950/5">
+                            <td className="px-3 py-2 font-bold text-slate-500 border-r border-slate-800/30">1 (Header)</td>
+                            <td className="px-3 py-2 font-bold text-emerald-400 border-r border-slate-800/30">ID</td>
+                            <td className="px-3 py-2 font-bold text-emerald-400 border-r border-slate-800/30">Name</td>
+                            <td className="px-3 py-2 font-bold text-emerald-400 border-r border-slate-800/30">Logo</td>
+                            <td className="px-3 py-2 font-bold text-emerald-400 border-r border-slate-800/30">Link</td>
+                            <td className="px-3 py-2 font-bold text-emerald-400 border-r border-slate-800/30">Network</td>
+                            <td className="px-3 py-2 font-bold text-emerald-400">Status</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 text-slate-500 border-r border-slate-800/30">2</td>
+                            <td className="px-3 py-2 text-slate-400 border-r border-slate-800/30">watch_01</td>
+                            <td className="px-3 py-2 font-sans border-r border-slate-800/30">জিটিভি লাইভ (GTV Live)</td>
+                            <td className="px-3 py-2 border-r border-slate-800/30">📺</td>
+                            <td className="px-3 py-2 border-r border-slate-800/30 text-sky-400 truncate max-w-[120px]">https://example.com/gtv</td>
+                            <td className="px-3 py-2 text-amber-400 border-r border-slate-800/30">monetag</td>
+                            <td className="px-3 py-2 text-emerald-400 font-bold">active</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 text-slate-500 border-r border-slate-800/30">3</td>
+                            <td className="px-3 py-2 text-slate-400 border-r border-slate-800/30">watch_02</td>
+                            <td className="px-3 py-2 font-sans border-r border-slate-800/30">টি স্পোর্টস HD</td>
+                            <td className="px-3 py-2 border-r border-slate-800/30">🎥</td>
+                            <td className="px-3 py-2 border-r border-slate-800/30 text-sky-400 truncate max-w-[120px]">https://example.com/tsports</td>
+                            <td className="px-3 py-2 text-cyan-400 border-r border-slate-800/30">startapp</td>
+                            <td className="px-3 py-2 text-emerald-400 font-bold">active</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </li>
+                  <li>শিটটিতে আপনার সকল ডাটা ইনপুট দেওয়া শেষ হলে, ডানদিকের <b>“Share (শেয়ার)”</b> বাটনে ক্লিক করুন।</li>
+                  <li>জেনারেল এক্সেস (General access) অপশনটি <code>Restricted</code> থেকে পরিবর্তন করে অবশ্যই <b>“Anyone with the link can view (লিংক থাকা যে কেউ দেখতে পারবে)”</b> করে দিন।</li>
+                  <li>এবার আপনার ব্রাউজারের অ্যাড্রেস বার থেকে স্প্রেডশিট আইডিটি কপি করে নিচের বক্সে পেস্ট করে বাটনে চাপুন। স্প্রেডশিট লিংক থেকে আইডিটি চেনার উপায়:
+                    <span className="block text-[10px] select-all bg-slate-900 border border-slate-800/40 p-2 rounded-lg font-mono text-cyan-400 mt-2 leading-relaxed">
+                      https://docs.google.com/spreadsheets/d/<span className="text-amber-400 underline font-bold font-sans px-1">1Bxxxx_ spreadsheet-id _xxx</span>/edit#gid=0
                     </span>
                   </li>
                 </ol>
@@ -963,27 +1272,80 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
                 </div>
               </div>
 
-              {/* Secondary block: Administration credentials update */}
-              <div className="pt-5 border-t border-slate-800 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                  <span className="text-[11px] font-mono text-slate-500 uppercase tracking-widest block">নিরাপত্তা কোড (ADMIN LOGIN PIN)</span>
-                  <span className="text-[10px] text-cyan-400 font-sans">বর্তমান অ্যাক্টিভ পিন: <b className="font-mono bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{localConfig.adminCode || "1234"}</b></span>
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    maxLength={10}
-                    placeholder="নতুন ৪-৮ ডিজিটের পিন কোড লিখুন"
-                    className="bg-slate-900 border border-slate-800 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono outline-none flex-1"
-                    value={newPinCode}
-                    onChange={(e) => setNewPinCode(e.target.value)}
-                  />
+              {/* Custom branding and textual properties customization */}
+              <div className="pt-5 border-t border-slate-800 space-y-4">
+                <span className="text-[11px] font-mono text-cyan-400 uppercase tracking-widest block font-bold">অ্যাপের নাম ও কাস্টম টেক্সট সেটিংস (Branding & Layout Texts)</span>
+                
+                <div className="flex items-center justify-between p-3.5 bg-slate-900 rounded-2xl border border-slate-800/80">
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-gray-200">ব্যাক বাটনে বিজ্ঞাপন (Return Ad On Back Button)</span>
+                    <p className="text-[10px] text-slate-500">ভিডিও লিঙ্ক ব্রাউজার এর ব্যক বাটনে ক্লিক করে হোমপেজে ফেরার সময় বিজ্ঞাপন দেখাবে কিনা তা নিয়ন্ত্রণ করুন।</p>
+                  </div>
+                  
                   <button
-                    onClick={() => handleSaveNewPin(newPinCode)}
-                    className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 hover:text-cyan-300 border border-cyan-500/20 px-4 py-2.5 rounded-xl text-xs font-bold cursor-pointer transition-all"
+                    onClick={() => {
+                      const current = localConfig.backButtonAdTrigger !== false;
+                      setLocalConfig({
+                        ...localConfig,
+                        backButtonAdTrigger: !current
+                      });
+                    }}
+                    className={`w-12 h-6 flex items-center rounded-all p-1 duration-300 cursor-pointer rounded-full ${
+                      localConfig.backButtonAdTrigger !== false ? "bg-cyan-500 justify-end" : "bg-slate-800 justify-start"
+                    }`}
                   >
-                    পিন আপডেট করুন
+                    <motion.div className="w-4 h-4 bg-white rounded-full shadow-md" layout />
                   </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">অ্যাপের নাম (App Name)</label>
+                    <input
+                      type="text"
+                      className="w-full bg-slate-900 border border-slate-800/80 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs outline-none"
+                      value={localConfig.appName || "ALL LIVE"}
+                      onChange={(e) => setLocalConfig({ ...localConfig, appName: e.target.value })}
+                      placeholder="যেমন: ALL LIVE"
+                    />
+                    <p className="text-[9px] text-slate-500">অ্যাপটির উপরে প্রদর্শিত টাইটেল নাম পরিবর্তন করুন</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">হোমপেজে ফিরুন বাটন টেক্সট (Back Button Text)</label>
+                    <input
+                      type="text"
+                      className="w-full bg-slate-900 border border-slate-800/80 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs outline-none"
+                      value={localConfig.backButtonText || "হোমপেজে ফিরুন (Ad সহ)"}
+                      onChange={(e) => setLocalConfig({ ...localConfig, backButtonText: e.target.value })}
+                      placeholder="যেমন: হোমপেজে ফিরুন (Ad সহ)"
+                    />
+                    <p className="text-[9px] text-slate-500">ইন-অ্যাপ সেফ ব্রাউজারে হোমপেজে ফেরার বাটনের লেখাটি কি হবে</p>
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">বিজ্ঞাপন প্যানেল টাইটেল (Ad Section Title)</label>
+                    <input
+                      type="text"
+                      className="w-full bg-slate-900 border border-slate-800/80 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs outline-none"
+                      value={localConfig.adTitle || "আপনার সুবিধাজনক বাটন বেছে নিন"}
+                      onChange={(e) => setLocalConfig({ ...localConfig, adTitle: e.target.value })}
+                      placeholder="যেমন: আপনার সুবিধাজনক বাটন বেছে নিন"
+                    />
+                    <p className="text-[9px] text-slate-500">হোম স্ক্রিনে ওয়াচ বাটন সমূহের ঠিক উপরে থাকা টাইটেল কাস্টমাইজ করুন</p>
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">বিজ্ঞাপন প্যানেল বিবরণী (Ad Section Description)</label>
+                    <textarea
+                      rows={2}
+                      className="w-full bg-slate-900 border border-slate-800/80 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs outline-none font-sans resize-none leading-relaxed"
+                      value={localConfig.adDescription || "নিচের ওয়াচ বাটনসমূহে ক্লিক করলেই স্পন্সর বিজ্ঞাপনটি শুরু হবে। ৫ সেকেন্ড বিজ্ঞাপন দেখে ওয়েবসাইট উপভোগ করুন।"}
+                      onChange={(e) => setLocalConfig({ ...localConfig, adDescription: e.target.value })}
+                      placeholder="বিজ্ঞাপন দেখার নির্দেশাবলী এখানে লিখুন..."
+                    />
+                    <p className="text-[9px] text-slate-500">টাইটেলের নিচে থাকা ছোট বিবরণীর টেক্সট কাস্টমাইজ করুন</p>
+                  </div>
                 </div>
               </div>
 
@@ -1011,6 +1373,35 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
                       onChange={(e) => setLocalConfig({ ...localConfig, securityAnswer: e.target.value })}
                       placeholder="যেমন: নীল"
                     />
+                  </div>
+                </div>
+
+                {/* Primary & Secondary Security PINs settings */}
+                <div className="pt-3 border-t border-slate-800/50 space-y-3">
+                  <span className="text-[11px] font-mono text-slate-500 uppercase tracking-widest block font-bold text-slate-350">নিরাপত্তা পিন কোড সেটিংস (ADMIN PIN CODES)</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div className="space-y-1">
+                      <label className="text-[9px] text-slate-400 font-bold uppercase block tracking-wider">প্রথম পিন কোড (Primary - Step 1)</label>
+                      <input
+                        type="text"
+                        maxLength={12}
+                        className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500 text-cyan-400 font-mono rounded-xl px-3.5 py-2.5 text-xs outline-none"
+                        value={localConfig.adminCode || ""}
+                        onChange={(e) => setLocalConfig({ ...localConfig, adminCode: e.target.value })}
+                        placeholder="যেমন: 1234"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] text-slate-400 font-bold uppercase block tracking-wider">দ্বিতীয় পিন কোড (Secondary - Step 2)</label>
+                      <input
+                        type="text"
+                        maxLength={12}
+                        className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500 text-emerald-450 font-mono rounded-xl px-3.5 py-2.5 text-xs outline-none"
+                        value={localConfig.adminCodeSecondary || ""}
+                        onChange={(e) => setLocalConfig({ ...localConfig, adminCodeSecondary: e.target.value })}
+                        placeholder="যেমন: 5678"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1440,6 +1831,251 @@ export default function AdminPanel({ config, onSaveConfig, onSyncGoogleSheet }: 
                   <li><b>Deploy</b> এ প্রেস করুন, গুগল পারমিশন চাইলে Access মঞ্জুর করুন।</li>
                   <li>ডিপ্লয় সম্পূর্ণ হলে যে <b>Web app URL</b> টি পাবেন, তা কপি করে এনে উপরের ইনপুট বক্সে জমা দিন এবং সেভ করুন!</li>
                 </ol>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 8: Donations & Ad-Free Subscription approvals */}
+        {activeTab === "donations" && (
+          <div className="space-y-6">
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <h3 className="text-sm font-bold text-gray-200 border-b border-slate-800/60 pb-3 flex items-center gap-2">
+                <Heart className="w-5 h-5 text-pink-400" />
+                <span>ডোনেশন পেমেন্ট গেটওয়ে সেটিংস</span>
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono">বিকাশ পার্সোনাল নাম্বার (bKash)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono outline-none"
+                    value={bkashNumInput}
+                    onChange={(e) => setBkashNumInput(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono">নগদ পার্সোনাল নাম্বার (Nagad)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono outline-none"
+                    value={nagadNumInput}
+                    onChange={(e) => setNagadNumInput(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono">রকেট পার্সোনাল নাম্বার (Rocket)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500 text-white rounded-xl px-3.5 py-2.5 text-xs font-mono outline-none"
+                    value={rocketNumInput}
+                    onChange={(e) => setRocketNumInput(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  onClick={handleSavePaymentNumbers}
+                  className="w-full bg-pink-500 hover:bg-pink-400 text-slate-950 font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-lg transition-all"
+                >
+                  <Save className="w-4 h-4 text-slate-950" />
+                  <span>পেমেন্ট গেটওয়ে নাম্বারসমূহ আপডেট করুন</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Donor / Ad-Free Activated Keys Management list */}
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-800/60 pb-3 gap-2">
+                <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-yellow-400" />
+                  <span>বিজ্ঞাপন মুক্ত মেম্বার ও ডোনার তালিকা</span>
+                </h3>
+                <span className="text-[10px] bg-indigo-950 border border-indigo-850 text-indigo-400 font-mono px-2.5 py-1 rounded-full font-bold self-start">
+                  মোট অ্যাক্টিভেটেড মেম্বার: {(localConfig.adFreeUsers || []).length}
+                </span>
+              </div>
+
+              <div className="space-y-3.5">
+                {!(localConfig.adFreeUsers && localConfig.adFreeUsers.length > 0) ? (
+                  <div className="text-center py-12 bg-slate-900/40 rounded-2xl border border-slate-800/60 text-slate-500 text-xs font-sans">
+                    এখনো কোনো ইউজার বিজ্ঞাপন মুক্ত হতে বা সাহায্য করতে ডোনেট করেননি।
+                  </div>
+                ) : (
+                  (localConfig.adFreeUsers || []).map((user) => (
+                    <div 
+                      key={user.activationKey} 
+                      className={`p-4 rounded-xl border flex flex-col lg:flex-row lg:items-center justify-between gap-4 transition-all ${
+                        user.status === "approved" 
+                          ? "bg-slate-900/60 border-slate-800" 
+                          : "bg-amber-950/20 border-amber-950/80"
+                      }`}
+                    >
+                      <div className="space-y-1.5 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-gray-100 font-sans">{user.userName}</span>
+                          {user.status === "approved" ? (
+                            <span className="text-[9px] bg-emerald-950/70 border border-emerald-550/40 text-emerald-400 font-bold px-2 py-0.5 rounded-full font-sans">
+                              অনুমোদিত বিজ্ঞাপন মুক্ত
+                            </span>
+                          ) : (
+                            <span className="text-[9px] bg-amber-950/70 border border-amber-550/40 text-amber-400 font-bold px-2 py-0.5 rounded-full font-sans animate-pulse">
+                              পেন্ডিং ডোনেশন রিভিউ
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 md:flex md:items-center gap-x-4 gap-y-1.5 text-[11px] text-slate-400 font-mono flex-wrap">
+                          <div>
+                            <span className="text-slate-500">মেথড / ট্রানজেকশন ID:</span>{" "}
+                            <span className="text-slate-200 font-bold font-sans">{user.senderId}</span>
+                          </div>
+                          <div className="md:border-l md:border-slate-800 md:pl-4">
+                            <span className="text-slate-500">টাকার অংক:</span>{" "}
+                            <span className="text-pink-400 font-bold">{user.amount} Taka</span>
+                          </div>
+                          <div className="md:border-l md:border-slate-800 md:pl-4">
+                            <span className="text-slate-500">মেয়াদ:</span>{" "}
+                            <span className="text-cyan-400 font-bold bg-slate-900 border border-slate-800/80 px-1.5 py-0.5 rounded">
+                              {user.duration === "1day" ? "১ দিন" : user.duration === "1month" ? "১ মাস" : user.duration === "1year" ? "১ বছর" : "স্থায়ী"}
+                            </span>
+                            {user.expiryDate && user.expiryDate !== "permanent" && (
+                              <span className="block text-[9px] text-slate-500 mt-1 font-mono">
+                                (মেয়াদ শেষ: {new Date(user.expiryDate).toLocaleString("bn-BD")})
+                              </span>
+                            )}
+                          </div>
+                          <div className="col-span-2 md:border-l md:border-slate-800 md:pl-4 mt-0.5">
+                            <span className="text-slate-500">লাইসেন্স কি (Activation Key):</span>{" "}
+                            <code className="text-cyan-400 bg-slate-950 px-1.5 py-0.5 rounded font-bold select-all">{user.activationKey}</code>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2.5 mt-2 lg:mt-0 flex-wrap shrink-0">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider font-mono">মেয়াদ পরিবর্তন:</span>
+                          <select
+                            className="bg-slate-900 text-slate-200 border border-slate-800 text-[11px] rounded-lg px-2.5 py-1.5 outline-none focus:border-cyan-500 font-sans cursor-pointer"
+                            value={user.duration || "permanent"}
+                            onChange={(e) => handleUpdateUserDuration(user.activationKey, e.target.value as any)}
+                          >
+                            <option value="1day">১ দিন (1 Day)</option>
+                            <option value="1month">১ মাস (1 Month)</option>
+                            <option value="1year">১ বছর (1 Year)</option>
+                            <option value="permanent">স্থায়ী (Permanent)</option>
+                            <option value="expired">বাতিল/মেয়াদ উত্তীর্ণ</option>
+                          </select>
+                        </div>
+
+                        {user.status === "pending" && (
+                          <div className="flex flex-col gap-1 self-end">
+                            <button
+                              onClick={() => handleApproveKey(user.activationKey)}
+                              className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold px-3.5 py-2 rounded-lg cursor-pointer transition-all hover:scale-[1.03] active:scale-95"
+                            >
+                              অনুমোদন দিন
+                            </button>
+                          </div>
+                        )}
+                        <div className="flex flex-col gap-1 self-end">
+                          <button
+                            onClick={() => handleRevokeKey(user.activationKey)}
+                            className="bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400 hover:bg-rose-950/20 text-xs font-bold px-3 py-2 rounded-lg cursor-pointer transition-all"
+                          >
+                            ডিলেট / বাতিল করুন
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 9: Global Double-PIN Security control Tab */}
+        {activeTab === "security" && (
+          <div className="space-y-6">
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <h3 className="text-sm font-bold text-gray-200 border-b border-slate-800/60 pb-3 flex items-center gap-2">
+                <Lock className="w-5 h-5 text-yellow-400" />
+                <span>ডাবল প্রটেকশন সিকিউরিটি সেটিংস (Double PIN Control)</span>
+              </h3>
+
+              <div className="bg-cyan-950/20 border border-cyan-500/25 p-4 rounded-xl space-y-2">
+                <h4 className="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
+                  🛡️ পিন নিরাপত্তা সিস্টেম সম্পর্কে জানুন
+                </h4>
+                <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                  ১ম এডমিন পিন কোড দেওয়ার পর ২য় নিরাপত্তা পিন কোড সঠিকভাবে দিলে তবেই কেবলমাত্র অ্যাডমিন প্যানেলে প্রবেশ করা যাবে। ১ম পিনটি পরিবর্তন করলে আপনার পূর্ববর্তী ডিফল্ট ১ম পিন <b>1234</b> বাতিল হয়ে যাবে। ২য় পিন সেট করলে সিকিউরিটি ডাবল স্তর হয়ে উঠবে।
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">১ম এডমিন পিন (Primary PIN)</label>
+                  <input
+                    type="text"
+                    maxLength={12}
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-cyan-500 text-cyan-400 rounded-xl px-3.5 py-2.5 text-xs font-mono tracking-widest outline-none"
+                    value={secPinInput1}
+                    onChange={(e) => setSecPinInput1(e.target.value)}
+                    placeholder="নতুন ১ম পিন বা বর্তমান পিন"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">২য় এডমিন পিন (Secondary PIN)</label>
+                  <input
+                    type="text"
+                    maxLength={12}
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-emerald-500 text-emerald-400 rounded-xl px-3.5 py-2.5 text-xs font-mono tracking-widest outline-none"
+                    value={secPinInput2}
+                    onChange={(e) => setSecPinInput2(e.target.value)}
+                    placeholder="২য় নিরাপত্তা পিন দিন"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">পিন রিকভারি সুরক্ষার প্রশ্ন (Security Question)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 text-white rounded-xl px-3.5 py-2.5 text-xs outline-none font-sans"
+                    value={securityQInput}
+                    onChange={(e) => setSecurityQInput(e.target.value)}
+                    placeholder="যেমন: আপনার প্রিয় রঙের নাম কী?"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-slate-500 uppercase font-mono font-bold">প্রশ্নের সঠিক উত্তর (Security Answer)</label>
+                  <input
+                    type="text"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 text-white rounded-xl px-3.5 py-2.5 text-xs outline-none font-sans"
+                    value={securityAInput}
+                    onChange={(e) => setSecurityAInput(e.target.value)}
+                    placeholder="যেমন: নীল"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleSaveSecuritySettings(secPinInput1, secPinInput2, securityQInput, securityAInput)}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-lg transition-all"
+                >
+                  <ShieldCheck className="w-4 h-4 text-white" />
+                  <span>নিরাপত্তা পিন ও প্রশ্ন সংরক্ষণ করুন (Save Security settings)</span>
+                </button>
               </div>
             </div>
           </div>

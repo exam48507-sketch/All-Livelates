@@ -6,9 +6,10 @@ interface InAppBrowserProps {
   url: string;
   title: string;
   onExit: () => void; // Triggered when returning back to portal (must show ad)
+  backButtonText?: string;
 }
 
-export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) {
+export default function InAppBrowser({ url, title, onExit, backButtonText }: InAppBrowserProps) {
   const [loading, setLoading] = useState(true);
   const [iframeKey, setIframeKey] = useState(0);
   const [useProxy, setUseProxy] = useState(true);
@@ -55,7 +56,7 @@ export default function InAppBrowser({ url, title, onExit }: InAppBrowserProps) 
             className="flex items-center gap-1.5 text-white bg-slate-800 hover:bg-slate-700 active:scale-95 px-3 py-1.5 rounded-xl text-xs font-semibold select-none cursor-pointer transition-all border border-slate-700/50"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>হোমপেজে ফিরুন (Ad সহ)</span>
+            <span>{backButtonText || "হোমপেজে ফিরুন (Ad সহ)"}</span>
           </button>
 
           {/* Title and Badge */}

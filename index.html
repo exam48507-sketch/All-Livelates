@@ -2,6 +2,31 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Safe window.fetch getter/setter descriptor patch to prevent "Cannot set property fetch of #<Window> which has only a getter" uncaught exceptions
+      (function() {
+        try {
+          if (typeof window !== "undefined" && window.fetch) {
+            var desc = Object.getOwnPropertyDescriptor(window, 'fetch') || Object.getOwnPropertyDescriptor(Window.prototype, 'fetch');
+            if (!desc || desc.writable === false || !desc.set) {
+              var currentFetch = window.fetch;
+              Object.defineProperty(window, 'fetch', {
+                get: function() {
+                  return currentFetch;
+                },
+                set: function(val) {
+                  currentFetch = val;
+                },
+                configurable: true,
+                enumerable: true
+              });
+            }
+          }
+        } catch (e) {
+          console.warn("Could not configure fetch getter/setter on window object:", e);
+        }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>All Live - ভিডিও বিজ্ঞাপন এবং মোবাইল ব্রাউজার ভিউয়ার</title>
     <meta name="theme-color" content="#020617" />
